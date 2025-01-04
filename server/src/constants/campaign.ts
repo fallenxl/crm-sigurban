@@ -1,0 +1,4 @@
+export enum CAMP_STATUS {
+  ACTIVE = 'ACTIVE',
+  INACTIVE = 'INACTIVE',
+}

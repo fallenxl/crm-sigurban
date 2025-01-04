@@ -1,0 +1,14 @@
+version: '3.1'
+
+services:
+  database:
+    image: mongo:latest
+    container_name: sigurban_db
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=admin
+    restart: always
+    ports:
+      - 27019:27017
+    volumes:
+      -  C:\Users\fallenxl\Documents\Naranja Media\Backups\sigurban_db:/data/db

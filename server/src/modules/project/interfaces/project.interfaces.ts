@@ -1,0 +1,1 @@
+export type lotStatus = 'available' | 'sold' | 'reserved';
