@@ -81,4 +81,21 @@ export class AuthService {
       user: getUser,
     };
   }
+
+  async generateTokenByUser(): Promise<AuthResponse> {
+    const user = await this.userService.getUserById(this.request.idUser);
+    if (!user) {
+      return null;
+    }
+    const payload = {
+      sub: user._id.toString(),
+      role: user.role,
+    }
+    return {
+      accessToken: jwt.sign(payload, process.env.JWT_SECRET, {
+        expiresIn: '3000d',
+      }),
+      user: user,
+    }
+  }
 }

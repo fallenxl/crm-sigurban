@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, Put } from '@nestjs/common';
 import { LotsService } from '../services/lots.service';
 import { CreateLotDto } from '../dto/create-lot.dto';
 import * as cron from 'node-cron';
@@ -37,6 +37,16 @@ export class LotsController {
   @Get('project/:id/:status')
   findAllByProjectAndStatus(@Param('id') id: string, @Param('status') status: string) {
     return this.lotsService.findAllByProjectAndStatus(id, status);
+  }
+
+  @Put(':id')
+  update(@Param('id') id: string, @Body() updateLotDto: any) {
+    return this.lotsService.update(id, updateLotDto);
+  }
+
+  @Delete(':id')
+  remove(@Param('id') id: string) {
+    return this.lotsService.remove(id);
   }
 
 }

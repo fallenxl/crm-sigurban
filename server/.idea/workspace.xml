@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="SELECTIVE" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="041275a0-a150-45a5-936a-36cf8383737d" name="Changes" comment="">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$/.." />
+  </component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 8
+}</component>
+  <component name="ProjectId" id="2fmYkUYuM6PGQbwypaYsUedxDLR" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;prod&quot;,
+    &quot;last_opened_file_path&quot;: &quot;C:/Users/fallenxl/Documents/Naranja Media/deploy/client&quot;,
+    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
+    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
+    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;yarn&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;terminal&quot;,
+    &quot;ts.external.directory.path&quot;: &quot;C:\\Users\\fallenxl\\Documents\\Naranja Media\\CRM-Naranja\\server\\node_modules\\typescript\\lib&quot;,
+    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
+  }
+}</component>
+  <component name="RecentsManager">
+    <key name="MoveFile.RECENT_KEYS">
+      <recent name="C:\Users\fallenxl\Documents\Naranja Media\CRM-Naranja\server\src\modules\settings\services" />
+      <recent name="C:\Users\fallenxl\Documents\Naranja Media\CRM-Naranja\server\src\modules\settings\controllers" />
+    </key>
+  </component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-js-predefined-1d06a55b98c1-74d2a5396914-JavaScript-WS-241.14494.235" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="SpellCheckerSettings" RuntimeDictionaries="0" Folders="0" CustomDictionaries="0" DefaultDictionary="application-level" UseSingleDictionary="true" transferred="true" />
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="041275a0-a150-45a5-936a-36cf8383737d" name="Changes" comment="" />
+      <created>1714407863342</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1714407863342</updated>
+      <workItem from="1714407864570" duration="2989000" />
+      <workItem from="1714411117397" duration="107000" />
+      <workItem from="1714411266658" duration="2156000" />
+      <workItem from="1714492265694" duration="3508000" />
+      <workItem from="1714575818679" duration="1426000" />
+      <workItem from="1714593958841" duration="3963000" />
+      <workItem from="1714620810782" duration="781000" />
+      <workItem from="1714681648354" duration="7000" />
+      <workItem from="1714695324673" duration="1837000" />
+      <workItem from="1714715696043" duration="33000" />
+      <workItem from="1714762094896" duration="721000" />
+      <workItem from="1714954444348" duration="2563000" />
+      <workItem from="1714963755437" duration="3612000" />
+      <workItem from="1715042756963" duration="292000" />
+      <workItem from="1715044948340" duration="778000" />
+      <workItem from="1715054690702" duration="259000" />
+      <workItem from="1715131364758" duration="1712000" />
+      <workItem from="1715393383738" duration="6100000" />
+      <workItem from="1715638129300" duration="560000" />
+      <workItem from="1715696493938" duration="481000" />
+      <workItem from="1715706622579" duration="3000" />
+      <workItem from="1715791321085" duration="669000" />
+      <workItem from="1715868189548" duration="2727000" />
+      <workItem from="1715871548636" duration="5439000" />
+      <workItem from="1715909928465" duration="1083000" />
+      <workItem from="1715911336029" duration="4390000" />
+      <workItem from="1716059237856" duration="2258000" />
+      <workItem from="1716066050715" duration="1544000" />
+      <workItem from="1716235644169" duration="4000" />
+      <workItem from="1716421913630" duration="7271000" />
+      <workItem from="1716488107047" duration="769000" />
+      <workItem from="1716565912101" duration="1513000" />
+      <workItem from="1716567537380" duration="522000" />
+      <workItem from="1717372815266" duration="2047000" />
+      <workItem from="1717389636216" duration="326000" />
+      <workItem from="1720047158154" duration="11000" />
+      <workItem from="1720047185242" duration="8000" />
+    </task>
+    <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+  </component>
+</project>

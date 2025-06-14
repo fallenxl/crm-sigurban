@@ -7,15 +7,23 @@ import {
   Post,
   Put,
   Query,
+  Request,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
 import { ApiHeader, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { UsersService } from '../services/users.service';
-import { UserDTO, UserUpdateDTO } from '../dto/user.dto';
+import { SettingsDTO, UserDTO, UserUpdateDTO } from '../dto/user.dto';
 import { AdminAccess } from '../../auth/decorators';
 import { AuthGuard, RolesGuard } from '../../auth/guards';
 import { Roles } from '../../../constants';
 import {Roles as ROLES} from '../../auth/decorators'
+import { FileInterceptor } from '@nestjs/platform-express';
+import { diskStorage } from 'multer';
+import { extname } from 'path';
+import * as dotenv from 'dotenv';
+dotenv.config();
 @ApiHeader({ name: 'authorization', description: 'Bearer token' })
 @ApiTags('Users (Admin)')
 @Controller('users')
@@ -40,6 +48,13 @@ export class UsersController {
     return await this.userService.getAllUser();
   }
 
+
+
+  @Get('/advisors/all')
+  public async getAllAdvisors() {
+    return await this.userService.getUsersAsAdvisor();
+  }
+
   
   @Get('/advisors')
   public async getAdvisors() {
@@ -51,17 +66,27 @@ export class UsersController {
     return await this.userService.getUsersByRole(Roles.MANAGER);
   }
 
-  @AdminAccess()
+W
   @Get(':id')
   public async getUser(@Param('id') id: string) {
     return await this.userService.getUserById(id);
   }
 
-  @AdminAccess()
   @Put('edit/:id')
   public async editUser(@Body() body: UserUpdateDTO, @Param('id') id: string) {
     return await this.userService.updateUserById(id, body);
   }
+
+  @Put('edit/settings/:id')
+  public async editUserSettings(@Body() body:SettingsDTO, @Param('id') id: string) {
+    return await this.userService.updateUserSettings(id, body);
+  }
+
+  @Get('settings/:id')
+  public async getUserSettings(@Param('id') id: string) {
+    return await this.userService.getUserSettings(id);
+  }
+
 
   @Get('settings/autoassign/:id')
   public async getUserAutoAssign(@Param('id') id: string) {
@@ -73,8 +98,6 @@ export class UsersController {
     return await this.userService.toggleAutoAssign(id);
   }
   
-
-  @AdminAccess()
   @Put('edit/password/:id')
   public async editUserPassword(
     @Body() body: { password: string },
@@ -93,6 +116,26 @@ export class UsersController {
   @Get('/advisors/last')
   public async getLastAdvisor() {
     return await this.userService.getLastAdvisor();
+  }
+
+  @Post('edit/avatar/:id')
+  @UseInterceptors(FileInterceptor('file',{
+    storage: diskStorage({
+      destination: './avatars',
+      filename: (req, file, cb) => {
+const extension = extname(file.originalname);
+        cb(null, "avatar-"+req.params.id+extension);
+      },
+    }),
+  }))
+  public async editUserAvatar(@Param('id') id: string, @UploadedFile() file:Express.Multer.File, @Request() req) {
+    if(!file){
+     return {error:'No file uploaded'}
+    }
+ 
+    const imgUrl = `${process.env.BASE_URL}avatar/${file.filename}`;
+    console.log(imgUrl);
+    return await this.userService.setUserAvatar(id, imgUrl);
   }
 
 }

@@ -22,6 +22,11 @@ export class User {
   email: string;
 
   @Prop({
+    default: [],
+  })
+  goalsCompleted?:[];
+
+  @Prop({
     required: true,
   })
   password: string;
@@ -84,10 +89,12 @@ export class User {
     type: Object,
     default: {
       autoAssign: false,
+      notificationsSound: true,
     },
   })
   settings? : {
     autoAssign: boolean;
+    notificationsSound: boolean;
   }
 }
 

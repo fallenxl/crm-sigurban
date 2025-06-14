@@ -117,3 +117,14 @@ export class UserUpdateDTO {
   @IsDate()
   updatedAt?: Date;
 }
+
+
+export class SettingsDTO {
+  @ApiProperty()
+  @IsOptional()
+  autoAssign: boolean;
+
+  @ApiProperty()
+  @IsOptional()
+  notificationsSound: boolean;
+}

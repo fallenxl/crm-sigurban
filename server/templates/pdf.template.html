@@ -1,0 +1,95 @@
+<!-- template.html -->
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reporte de Leads</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+        header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+        h1 {
+            color: #0073AA;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+        }
+        table, th, td {
+            border: 1px solid black;
+        }
+        th, td {
+            padding: 8px;
+            text-align: left;
+        }
+        footer {
+            text-align: center;
+            position: fixed;
+            bottom: 0;
+            width: 100%;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Nombre de la Empresa</h1>
+        <h2>Reporte de Leads</h2>
+    </header>
+    
+    <section>
+        <p><strong>Total de Leads:</strong> {{totalLeads}}</p>
+        
+        <h3>Leads por Status</h3>
+        <table>
+            <tr>
+                <th>Status</th>
+                <th>Cantidad</th>
+            </tr>
+            {{#each leadsByStatus}}
+            <tr>
+                <td>{{status}}</td>
+                <td>{{count}}</td>
+            </tr>
+            {{/each}}
+        </table>
+
+        <h3>Leads por Bancos</h3>
+        <table>
+            <tr>
+                <th>Banco</th>
+                <th>Cantidad</th>
+            </tr>
+            {{#each leadsByBanks}}
+            <tr>
+                <td>{{_id.name}}</td>
+                <td>{{count}}</td>
+            </tr>
+            {{/each}}
+        </table>
+
+        <!-- Puedes añadir más secciones aquí -->
+        
+    </section>
+    
+    <footer>
+        <p>Página <span class="pageNumber"></span> de <span class="totalPages"></span></p>
+    </footer>
+    
+    <script>
+        window.onload = () => {
+            const pageNumbers = document.querySelectorAll('.pageNumber');
+            const totalPages = document.querySelectorAll('.totalPages');
+            const totalPagesCount = Math.ceil(document.body.scrollHeight / window.innerHeight);
+            totalPages.forEach(total => total.innerText = totalPagesCount);
+            pageNumbers.forEach((page, index) => page.innerText = index + 1);
+        };
+    </script>
+</body>
+</html>

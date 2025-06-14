@@ -23,6 +23,10 @@ export class CreateProjectDto {
     @IsOptional()
     models?: [];
 
+    @ApiProperty()
+    @IsString()
+    @IsOptional()
+    svg?: string;
     
 
 }

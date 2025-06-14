@@ -3,21 +3,56 @@ import {
   IsString,
   IsEmail,
   IsOptional,
-  IsEnum,
   MaxLength,
   IsArray,
-  IsDate,
   MinLength,
 } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { LeadStatus, LeadTimeline } from '../interfaces';
 
+export class LeadChatbotDto {
+  @ApiProperty({ example: 'Juan Perez' })
+  @IsNotEmpty()
+  @IsString()
+  name: string;
+
+  @ApiProperty({ example: '99339922' })
+  @IsNotEmpty()
+  @IsString()
+  phone: string;
+
+  @ApiProperty({ example: '0508200000xxx'})
+  @IsNotEmpty()
+  @IsString()
+  dni?: string;
+
+  @ApiProperty()
+  @IsOptional()
+  status?: LeadStatus;
+
+  @ApiProperty()
+  genre?: string;
+
+  @ApiProperty()
+  @IsOptional()
+  
+  source?: string;
+
+  @ApiProperty()
+  @IsOptional()
+  timeline?: Array<LeadTimeline>;
+
+  @ApiProperty()
+  @IsOptional()
+  advisorID?: string;
+
+}
 
 export class LeadDto {
   @ApiProperty({ example: '5f9b2b3b1c9d440000d3e4a0' })
-  @IsNotEmpty()
+  @IsOptional()
   @IsString()
-  campaignID: string;
+  campaignID?: string;
 
   @ApiProperty({ example: 'Juan Perez' })
   @IsNotEmpty()
@@ -26,10 +61,16 @@ export class LeadDto {
 
   @ApiProperty({ example: '0503198500284' })
   @IsOptional()
-  @IsString()
-  @MaxLength(13)
-  @MinLength(13)
   dni?: string;
+
+  @IsOptional()
+  passport?: string;
+
+  @IsOptional()
+  residenceNumber?: string;
+
+  @ApiProperty({ example: 'M' })
+  genre?: string;
 
   @ApiProperty({ example: '99339922' })
   @IsNotEmpty()
@@ -38,7 +79,6 @@ export class LeadDto {
 
   @ApiProperty({ example: 'test@test.com' })
   @IsOptional()
-  @IsEmail()
   @IsString()
   email?: string;
 
@@ -67,7 +107,7 @@ export class LeadDto {
   @IsString()
   interestedIn?: string;
 
-  @ApiProperty({ example: 'Llamar en 2 dias' })
+  @ApiProperty({ example: 'Llamar en 2 Dias' })
   @IsOptional()
   @IsString()
   comment?: string;
@@ -80,6 +120,11 @@ export class LeadDto {
   @IsOptional()
   @IsString()
   advisorID?: string;
+
+  @ApiProperty()
+  @IsOptional()
+  @IsString()
+  birthdate?: string;
 
   @ApiProperty()
   @IsOptional()
@@ -101,12 +146,11 @@ export class LeadDto {
   @IsString()
   workPosition?: string;
 
-
   @ApiProperty()
   @IsOptional()
   @IsString()
   workAddress?: string;
-  
+
   @ApiProperty()
   @IsOptional()
   @IsString()
@@ -132,14 +176,30 @@ export class UpdateLeadDto {
   @ApiProperty()
   @IsOptional()
   @IsString()
-  @MaxLength(13)
-  @MinLength(13)
   dni?: string;
 
   @ApiProperty()
   @IsOptional()
   @IsString()
+  birthdate?: string;
+
+  @ApiProperty()
+  @IsOptional()
+  @IsString()
+  passport?: string;
+
+  @ApiProperty()
+  @IsOptional()
+  @IsString()
+  residenceNumber?: string;
+
+  @ApiProperty()
+  @IsOptional()
+  @IsString()
   phone?: string;
+
+  @ApiProperty()
+  genre?: string;
 
   @ApiProperty()
   @IsOptional()
@@ -152,7 +212,7 @@ export class UpdateLeadDto {
   @IsString()
   address?: string;
 
-  
+
   @ApiProperty({})
   @IsOptional()
   @IsString()
@@ -168,10 +228,6 @@ export class UpdateLeadDto {
   @IsString()
   source?: string;
 
-  // @ApiProperty()
-  // @IsOptional()
-  // @IsString()
-  // rejectedBanks?: string;
 
   @ApiProperty()
   @IsOptional()
@@ -194,12 +250,12 @@ export class UpdateLeadDto {
   @IsOptional()
   @IsString()
   workAddress?: string;
-  
+
   @ApiProperty()
   @IsOptional()
   @IsString()
   workTime?: string;
-  
+
   @ApiProperty()
   @IsOptional()
   @IsString()
@@ -213,6 +269,21 @@ export class UpdateLeadDto {
   @IsOptional()
   @IsString()
   comment?: string;
+
+  @ApiProperty()
+  @IsOptional()
+  @IsString()
+  bankID?: string;
+
+  @ApiProperty()
+  @IsOptional()
+  @IsString()
+  financingProgram?: string;
+
+  @ApiProperty()
+  @IsOptional()
+  @IsArray()
+  updatedColumns?: Array<string>;
 }
 
 export class LeadStatusDTO {
@@ -249,7 +320,7 @@ export class LeadStatusDTO {
   @ApiProperty()
   @IsOptional()
   @IsString()
-  dateToCall?: string
+  dateToCall?: string;
 
   @ApiProperty()
   @IsOptional()
@@ -269,6 +340,23 @@ export class LeadStatusDTO {
     area: number;
     priceWithDiscount: number;
   };
+
+  @ApiProperty()
+  @IsOptional()
+  documents?: string[];
+
+  @ApiProperty()
+  @IsOptional()
+  approved: string;
+
+  @ApiProperty()
+  @IsOptional()
+  sameFinancialInstitutionContinues: string;
+
+  @ApiProperty()
+  @IsOptional()
+  @IsString()
+  whoIsResponsible?: string;
 
   @ApiProperty()
   @IsOptional()

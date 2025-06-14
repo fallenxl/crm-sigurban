@@ -6,13 +6,14 @@ import { Lots } from '../schemas/lots.schemas';
 import { Model } from 'mongoose';
 import { ErrorManager } from 'src/utils/error.manager';
 import { NotificationService } from '../../notification/services/notification.service';
+import { LotStatus } from '../../../constants/lots';
 
 @Injectable()
 export class LotsService {
   constructor(
     @InjectModel(Lots.name) private lotModel: Model<Lots>,
     private readonly notificationService: NotificationService,
-  ) {}
+  ) { }
 
   async create(createLotDto: CreateLotDto): Promise<Lots> {
     try {
@@ -29,6 +30,7 @@ export class LotsService {
       }
 
       const createdLot = new this.lotModel(createLotDto);
+
       return await createdLot.save();
     } catch (error) {
       throw ErrorManager.createSignatureError(error.message);
@@ -45,7 +47,7 @@ export class LotsService {
 
   async findOne(id: string): Promise<Lots> {
     try {
-      return await this.lotModel.findById(id);
+      return (await this.lotModel.findById(id)).populate([{ path: 'projectID', select: 'name' }, { path: 'reservedBy', select: ['name', 'phone'] }]);
     } catch (error) {
       throw ErrorManager.createSignatureError(error.message);
     }
@@ -89,6 +91,57 @@ export class LotsService {
         reservedBy: null,
         reservationDate: null,
       });
+    } catch (error) {
+      throw ErrorManager.createSignatureError(error.message);
+    }
+  }
+
+  async remove(id: string): Promise<void> {
+    try {
+      await this.lotModel.findByIdAndRemove(id);
+    } catch (error) {
+      throw ErrorManager.createSignatureError(error.message);
+    }
+  }
+
+
+
+  async update(id: string, updateLotDto: UpdateLotDto): Promise<Lots> {
+    try {
+      const lotFound = await this.lotModel.findOne({ _id: id });
+      if (updateLotDto.lot && lotFound.lot !== updateLotDto.lot) {
+        const validateLot = await this.lotModel.findOne({
+          lot: updateLotDto.lot,
+          projectID: lotFound.projectID,
+        });
+        if (validateLot) {
+          throw new ErrorManager({
+            message:
+              'Ya existe un lote con ese nombre en el proyecto seleccionado',
+            type: 'BAD_REQUEST',
+          });
+        }
+      }
+      return await this.lotModel.findByIdAndUpdate(id, updateLotDto, {
+        new: true,
+      });
+    } catch (error) {
+      throw ErrorManager.createSignatureError(error.message);
+    }
+  }
+
+  async updateLotStatus(id: string, status: LotStatus, leadId?: string): Promise<Lots> {
+    try {
+      if (!leadId && status === 'Reservado') {
+        throw ErrorManager.createSignatureError('Lead ID is required');
+      }
+      if (status === 'Disponible') {
+        return await this.lotModel.findByIdAndUpdate
+          (id, { status: status, reservedBy: null, reservationDate: null }, { new: true });
+      }
+
+      return await this.lotModel.findByIdAndUpdate
+        (id, { status: status });
     } catch (error) {
       throw ErrorManager.createSignatureError(error.message);
     }

@@ -8,12 +8,14 @@ export class Bank {
   @Prop({ required: true, unique: true })
   name: string;
 
-
   @Prop({ trim: true })
   description?: string;
 
-  @Prop({  default: [] })
+  @Prop({ default: [] })
   financingPrograms?: FinancialPlans[];
+
+  @Prop({ default: [] })
+  requirements?: string[];
 }
 
 export const BankSchema = SchemaFactory.createForClass(Bank);

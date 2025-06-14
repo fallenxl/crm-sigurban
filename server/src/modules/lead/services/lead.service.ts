@@ -1,11 +1,11 @@
 import { Inject, Injectable, Scope } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Lead } from '../schemas/lead.schemas';
-import { Document, Model } from 'mongoose';
+import mongoose, { Document, Model } from 'mongoose';
 import { ErrorManager } from '../../../utils/error.manager'; // Import the ErrorManager utility
-import { LeadDto, LeadStatusDTO, UpdateLeadDto } from '../dto/lead.dto';
+import { LeadChatbotDto, LeadDto, LeadStatusDTO, UpdateLeadDto } from '../dto/lead.dto';
 import { UsersService } from '../../users/services/users.service';
-import { LeadStatus, LeadStatusEnum, LeadStatustype } from '../interfaces';
+import { LEAD_COLUMNS, LeadStatustype } from '../interfaces';
 import { Request } from 'express';
 import { REQUEST } from '@nestjs/core';
 import { v4 as uuid } from 'uuid'; // Import the uuid library for generating unique IDs
@@ -13,9 +13,12 @@ import { POPULATES_LEAD, Roles } from '../../../constants';
 import { CampaignService } from 'src/modules/campaign/services/campaign.service';
 import { NotificationService } from 'src/modules/notification/services/notification.service';
 import { BankService } from 'src/modules/bank/services';
-import { LotsService } from 'src/modules/lots/services/lots.service';
 import { SocketGateway } from 'src/modules/socket/gateways/socket.gateway';
-
+import { CheckPermissionsService } from './check-permissions.service';
+import { LotsService } from 'src/modules/lots/services/lots.service';
+import { SettingsService } from '../../settings/services/settings.service';
+import PDFDocument from 'pdfkit-table';
+import * as ExcelJS from 'exceljs';
 @Injectable({ scope: Scope.REQUEST })
 export class LeadService {
   constructor(
@@ -25,9 +28,12 @@ export class LeadService {
     private readonly campaignService: CampaignService,
     private readonly notificationService: NotificationService,
     private readonly bankService: BankService,
-    private readonly lotService: LotsService,
     private readonly socketGateway: SocketGateway,
-  ) {}
+    private readonly checkPermissions: CheckPermissionsService,
+    private readonly lotService: LotsService,
+    private readonly settingsService: SettingsService,
+  ) {
+  }
 
   /*
    *  Principal operations
@@ -36,31 +42,43 @@ export class LeadService {
   // Create a new lead
   async create(lead: LeadDto): Promise<Lead> {
     try {
-      const leadFound = await this.getLeadByDni(lead.dni);
-      if (leadFound) {
-        throw new ErrorManager({
-          type: 'BAD_REQUEST',
-          message: 'Ya existe un prospecto con ese DNI',
-        });
+      let leadFound;
+      let messageError = '';
+      if (lead.dni) {
+        leadFound = await this.getLeadByDni(lead.dni);
+        messageError = 'Ya existe un prospecto con ese DNI';
+        if (leadFound) {
+          throw new ErrorManager({
+            type: 'BAD_REQUEST',
+            message: messageError,
+          });
+        }
+      } else if (lead.passport) {
+        leadFound = await this.getLeadByPassport(lead.passport);
+        messageError = 'Ya existe un prospecto con ese pasaporte';
+        if (leadFound) {
+          throw new ErrorManager({
+            type: 'BAD_REQUEST',
+            message: messageError,
+          });
+        }
+      } else if (lead.residenceNumber) {
+        leadFound = await this.getLeadByResidenceNumber(lead.residenceNumber);
+        messageError = 'Ya existe un prospecto con ese número de residencia';
+        if (leadFound) {
+          throw new ErrorManager({
+            type: 'BAD_REQUEST',
+            message: messageError,
+          });
+        }
       }
 
-      const campaignFound = await this.campaignService.getCampaignById(
-        lead.campaignID,
-      );
-
-      if (!campaignFound) {
-        throw new ErrorManager({
-          type: 'BAD_REQUEST',
-          message: 'La campaña no existe',
-        });
-      }
 
       lead.status = LeadStatustype.TO_ASSIGN;
 
       // If the lead has an advisorID, we check if the user exists and if it is an advisor
       if (lead.advisorID) {
         const userFound = await this.userService.userExists(lead.advisorID);
-        await this.userService.userIsByRole(userFound, Roles.ADVISOR);
         await this.userService.setLastAdvisor(userFound._id);
         lead.status = LeadStatustype.TO_CALL;
       }
@@ -68,8 +86,7 @@ export class LeadService {
       const userFound = await this.userService.userExists(this.request.idUser);
       lead.avatar =
         lead.avatar ||
-        `https://api.dicebear.com/5.x/initials/svg?seed=${
-          lead.name.split(' ')[0]
+        `https://api.dicebear.com/5.x/initials/svg?seed=${lead.name.split(' ')[0]
         }`;
       lead.timeline = [
         {
@@ -81,8 +98,73 @@ export class LeadService {
           updatedBy: userFound.name,
         },
       ];
-      const createdLead = await new this.leadModel(lead).save();
+      // If the lead has a campaignID, we check if the campaign exists
+      lead.campaignID = lead.campaignID || null;
 
+      const createdLead = await this.leadModel.create(lead);
+      if (createdLead.advisorID) {
+        await this.notificationService.sendNotification({
+          title: 'Nuevo prospecto asignado',
+          message: `Se te ha asignado un nuevo prospecto con el nombre ${createdLead.name}`,
+          userID: createdLead.advisorID,
+          leadID: createdLead._id,
+        });
+        await this.notificationService.sendNotificationToAdmin({
+          title: 'Prospecto actualizado',
+          message: `El prospecto ${createdLead.name} ha sido actualizado`,
+          leadID: createdLead._id,
+        });
+      } else {
+        await this.notificationService.sendNotificationByRole(
+          {
+            title: 'Nuevo prospecto registrado',
+            message: `Se ha registrado un nuevo lead con el nombre ${createdLead.name}, asignarlo a un asesor lo antes posible`,
+            leadID: createdLead._id,
+          },
+          [Roles.RECEPTIONIST, Roles.ADMIN],
+        );
+      }
+      this.socketGateway.leadUpdated([createdLead.advisorID?.toString()]);
+
+      return createdLead.populate(POPULATES_LEAD);
+    } catch (error) {
+      if (error.status === 201) {
+        throw new ErrorManager({
+          type: 'BAD_REQUEST',
+          message: 'El prospecto ya existe',
+        });
+      }
+      throw ErrorManager.createSignatureError(error.message);
+    }
+  }
+
+  async createLeadByChatbot(lead: LeadChatbotDto): Promise<Lead> {
+    try {
+      const leadFound = await this.getLeadByDni(lead.dni);
+      if (leadFound) {
+        throw new ErrorManager({
+          type: 'BAD_REQUEST',
+          message: 'Ya existe un prospecto con ese DNI',
+        });
+      }
+
+      lead.advisorID = (await this.userService.getLastAdvisor())._id;
+
+      lead.status = LeadStatustype.TO_CALL;
+      lead.source = 'Facebook Naranja';
+      lead.timeline = [
+        {
+          status: lead.status,
+          title: 'Lead creado',
+          message: 'El lead ha sido creado',
+          date: new Date(),
+          _id: uuid(),
+          updatedBy: "Chatbot",
+        },
+      ];
+
+
+      const createdLead = await this.leadModel.create(lead);
       if (createdLead.advisorID) {
         await this.notificationService.sendNotification({
           title: 'Nuevo prospecto asignado',
@@ -94,21 +176,16 @@ export class LeadService {
         await this.notificationService.sendNotificationByRole(
           {
             title: 'Nuevo prospecto registrado',
-            message: `Se ha registrado un nuevo lead con el nombre ${createdLead.name}, asignalo a un asesor lo antes posible`,
+            message: `Se ha registrado un nuevo lead con el nombre ${createdLead.name}, asignarlo a un asesor lo antes posible`,
             leadID: createdLead._id,
           },
           [Roles.RECEPTIONIST, Roles.ADMIN],
         );
       }
+      this.socketGateway.leadUpdated([createdLead.advisorID?.toString()]);
 
       return createdLead.populate(POPULATES_LEAD);
     } catch (error) {
-      if (error.status === 201) {
-        throw new ErrorManager({
-          type: 'BAD_REQUEST',
-          message: 'El prospecto ya existe',
-        });
-      }
       throw ErrorManager.createSignatureError(error.message);
     }
   }
@@ -128,13 +205,26 @@ export class LeadService {
   // Get a lead by ID
   async getLeadById(id: string): Promise<Lead> {
     try {
-      const { roleUser } = this.request;
 
       const leadFound = await this.leadExists(id);
 
-      this.checkPermission(roleUser, leadFound, this.request.idUser);
-
       return await leadFound.populate(POPULATES_LEAD);
+    } catch (error) {
+      throw ErrorManager.createSignatureError(error.message);
+    }
+  }
+
+  async getLeadByResidenceNumber(residenceNumber: string): Promise<Lead> {
+    try {
+      return this.leadModel.findOne({ residenceNumber });
+    } catch (error) {
+      throw ErrorManager.createSignatureError(error.message);
+    }
+  }
+
+  async getLeadByPassport(passport: string): Promise<Lead> {
+    try {
+      return this.leadModel.findOne({ passport });
     } catch (error) {
       throw ErrorManager.createSignatureError(error.message);
     }
@@ -154,6 +244,23 @@ export class LeadService {
     try {
       return this.leadModel
         .find({ status: LeadStatustype.PROSPECT })
+        .populate(POPULATES_LEAD)
+        .sort({ createdAt: -1 });
+    } catch (error) {
+      throw ErrorManager.createSignatureError(error.message);
+    }
+  }
+
+  async getLeadsByUserID(userID: string): Promise<Lead[]> {
+    try {
+      return this.leadModel
+        .find({
+          $or: [
+            { advisorID: userID },
+            { managerID: userID },
+            { bankManagerID: userID },
+          ],
+        })
         .populate(POPULATES_LEAD)
         .sort({ createdAt: -1 });
     } catch (error) {
@@ -197,7 +304,7 @@ export class LeadService {
     }
   }
 
-  async getLeadsWithouAdvisor(): Promise<Lead[]> {
+  async getLeadsWithoutAdvisor(): Promise<Lead[]> {
     try {
       return this.leadModel.find({ advisorID: null }).populate(POPULATES_LEAD);
     } catch (error) {
@@ -213,46 +320,78 @@ export class LeadService {
     }
   }
 
-
-  async getLeadStatus(id: string): Promise<LeadStatus> {
-    try {
-      const leadFound = await this.leadExists(id);
-      return leadFound.status;
-    } catch (error) {
-      throw ErrorManager.createSignatureError(error.message);
-    }
-  }
-
   // Update only information of a lead
   async updateLeadById(id: string, lead: UpdateLeadDto): Promise<Lead> {
     try {
+      console.log(lead);
       const { idUser, roleUser } = this.request;
       const leadFound = await this.leadExists(id);
 
-      this.checkPermission(roleUser, leadFound, idUser);
+      // if(!this.checkPermissions.checkPermission(roleUser, leadFound, idUser)){
+      //   throw new ErrorManager({
+      //     type: 'BAD_REQUEST',
+      //     message: 'No tienes permisos para actualizar el prospecto',
+      //   });
+      // }
+
       if (lead.dni && lead.dni !== leadFound.dni) {
         const dniExists = await this.getLeadByDni(lead.dni);
         if (dniExists) {
+          console.log(dniExists);
           throw new ErrorManager({
             type: 'BAD_REQUEST',
             message: 'El DNI ya existe',
           });
         }
       }
-      
-      const userFound = await this.userService.userExists(this.request.idUser);
-      lead.timeline = [...leadFound.timeline, {
-        _id: uuid(),
-        updatedBy: userFound.name,
-        status: leadFound.status,
-        title: `Prospecto actualizado`,
-        message: 'La información del prospecto ha sido actualizada',
-        date: new Date(),
-      }]
-      
-      const leadUpdated = await this.leadModel.findByIdAndUpdate(id, lead);
 
-      this.socketGateway.leadUpdated();
+      if (lead.passport && lead.passport !== leadFound.passport) {
+        const passportExists = await this.getLeadByPassport(lead.passport);
+        if (passportExists) {
+          throw new ErrorManager({
+            type: 'BAD_REQUEST',
+            message: 'El pasaporte ya existe',
+          });
+        }
+      }
+
+      if (lead.residenceNumber && lead.residenceNumber !== leadFound.residenceNumber) {
+        const residenceNumberExists = await this.getLeadByResidenceNumber(lead.residenceNumber);
+        if (residenceNumberExists) {
+          throw new ErrorManager({
+            type: 'BAD_REQUEST',
+            message: 'El número de residencia ya existe',
+          });
+        }
+      }
+
+      const userFound = await this.userService.userExists(this.request.idUser);
+
+      lead.timeline = [
+        ...leadFound.timeline,
+        {
+          _id: uuid(),
+          updatedBy: userFound.name,
+          status: leadFound.status,
+          title: `Prospecto actualizado`,
+          message: `El prospecto ha sido actualizado, se modificaron los campos: ${lead.updatedColumns
+            .map((item: string) => {
+              return LEAD_COLUMNS[item];
+            })
+            .join(', ')}.`,
+          date: new Date(),
+        },
+      ];
+
+      const leadUpdated = await this.leadModel.findOneAndUpdate(
+        { _id: id },
+        lead,
+      );
+
+      this.socketGateway.leadUpdated([
+        leadUpdated.advisorID?.toString(),
+        leadUpdated.managerID?.toString(),
+      ]);
 
       return leadUpdated.populate(POPULATES_LEAD);
     } catch (error) {
@@ -302,88 +441,63 @@ export class LeadService {
       });
 
       Promise.all(leads);
+      this.socketGateway.leadUpdated();
     } catch (error) {
       throw ErrorManager.createSignatureError(error.message);
     }
   }
 
-  // Update the status of a lead
-  async updateLeadStatus(id: string, leadStatus: LeadStatusDTO): Promise<Lead> {
+  async revertLeadStatus(id: string): Promise<Lead> {
     try {
       const leadFound = await this.leadExists(id);
-
-      this.checkPermissionToUpdateLeadStatus(leadFound.status);
-
-      if (leadStatus.status === leadFound.status.selected) {
-        return;
+      if (!leadFound.lastStatus) {
+        throw new ErrorManager({
+          type: 'BAD_REQUEST',
+          message: 'No se puede revertir el estado del prospecto',
+        });
+      }
+      if (leadFound.status.type === LeadStatustype.TO_BANK_PREQUALIFIED.type) {
+        leadFound.bankID = null;
+        leadFound.financingProgram = '';
       }
 
-      switch (leadFound.status.type) {
-        case LeadStatusEnum.PENDING_CALL:
-          await this.handlePendingCallStatus(leadFound, leadStatus);
-          break;
-        case LeadStatusEnum.FUTURE_SALES_OPPORTUNITY:
-          await this.handlePotentialToCallStatus(leadFound, leadStatus);
-          break;
-        case LeadStatusEnum.TO_ASSIGN:
-          await this.handleToAssignStatus(leadFound, leadStatus);
-          break;
-        case LeadStatusEnum.PROSPECT:
-          if (leadStatus.status === LeadStatusEnum.TO_CALL) {
-            await this.handlePotentialToCallStatus(leadFound, leadStatus);
-          }
-          break;
-        case LeadStatusEnum.TO_ASSIGN:
-          if (leadStatus.status === LeadStatusEnum.TO_CALL) {
-            await this.handlePotentialToCallStatus(leadFound, leadStatus);
-          }
-          break;
-        case LeadStatusEnum.TO_CALL:
-          await this.handleToCallStatus(leadFound, leadStatus);
-          break;
-        case LeadStatusEnum.TO_BUREAU_PREQUALIFIED:
-          await this.handleBureauPrequalifiedStatus(leadFound, leadStatus);
-          break;
-        case LeadStatusEnum.TO_BANK_PREQUALIFIED:
-          await this.handleBankPrequalifiedStatus(leadFound, leadStatus);
-          break;
-        case LeadStatusEnum.TO_ASSIGN_PROJECT:
-          await this.handleToAssignProjectStatus(leadFound, leadStatus);
-          break;
-        case LeadStatusEnum.TO_ASSIGN_HOUSE:
-          await this.handleToAssignHouseStatus(leadFound, leadStatus);
-          break;
-        case LeadStatusEnum.PROSPECT_DEFINED:
-          await this.handleProspectDefinedStatus(leadFound, leadStatus);
-          break;
-        default:
-          throw new ErrorManager({
-            type: 'BAD_REQUEST',
-            message: 'Estado de lead no válido',
-          });
+      if (leadFound.status.type === LeadStatustype.TO_ASSIGN.type) {
+        leadFound.advisorID = null;
       }
 
-      await this.notificationService.sendNotificationToAdmin({
-        title: 'Prospecto actualizado',
-        message: `El prospecto ${leadFound.name} ha sido actualizado`,
-        leadID: leadFound._id,
-      });
+      if (leadFound.status.type === LeadStatustype.TO_ASSIGN_HOUSE.type) {
+        await this.lotService.releaseLot(leadFound.projectDetails.lotID);
+        leadFound.projectDetails = {
+          lotID: null,
+          projectID: null,
+          houseModel: null,
+        };
+
+
+      }
+
+      if (leadFound.status.type === LeadStatustype.PROSPECT_DEFINED.type && !leadFound.status.condition) {
+        leadFound.projectDetails.houseModel = null;
+
+      }
+
+      leadFound.status = leadFound.lastStatus;
 
       const userFound = await this.userService.userExists(this.request.idUser);
-      // Create a new timeline for the lead
+
       leadFound.timeline.push({
         _id: uuid(),
         updatedBy: userFound.name,
         status: leadFound.status,
-        title: `Prospecto actualizado a ${leadFound.status.type}`,
-        message: leadStatus.comment,
+        title: `Prospecto actualizado`,
+        message: 'Se ha revertido el estado del prospecto',
         date: new Date(),
       });
 
       this.socketGateway.leadUpdated();
+      return await leadFound.save();
 
 
-      return (await leadFound.save()).populate(POPULATES_LEAD);
     } catch (error) {
       throw ErrorManager.createSignatureError(error.message);
     }
@@ -393,9 +507,7 @@ export class LeadService {
   async updateLeadAdvisor(id: string, advisorID: string): Promise<Lead> {
     try {
       const leadFound = await this.leadExists(id);
-      const userFound = await this.userService.userExists(advisorID);
-      await this.userService.userIsByRole(userFound, Roles.ADVISOR);
-
+      const userFound = await this.userService.userExists(this.request.idUser);
       leadFound.advisorID = advisorID || undefined;
 
       if (leadFound.advisorID) {
@@ -415,7 +527,7 @@ export class LeadService {
         // Create a new timeline for the lead
         leadFound.timeline.push({
           _id: uuid(),
-          updatedBy: this.request.idUser,
+          updatedBy: userFound.name,
           status: leadFound.status,
           title: `Prospecto actualizado`,
           message: 'Prospecto asignado a un nuevo asesor',
@@ -431,7 +543,7 @@ export class LeadService {
         // Create a new timeline for the lead
         leadFound.timeline.push({
           _id: uuid(),
-          updatedBy: this.request.idUser,
+          updatedBy: userFound.name,
           status: leadFound.status,
           title: `Prospecto actualizado`,
           message: 'Prospecto se le ha quitado un asesor',
@@ -439,6 +551,11 @@ export class LeadService {
         });
       }
 
+      this.socketGateway.leadUpdated([
+        leadFound.advisorID?.toString(),
+        leadFound.managerID?.toString(),
+        leadFound.bankManagerID?.toString(),
+      ]);
       return (await leadFound.save()).populate(POPULATES_LEAD);
     } catch (error) {
       throw ErrorManager.createSignatureError(error.message);
@@ -476,544 +593,32 @@ export class LeadService {
         date: new Date(),
       });
 
+      this.socketGateway.leadUpdated();
       return (await leadFound.save()).populate(POPULATES_LEAD);
     } catch (error) {
       throw ErrorManager.createSignatureError(error.message);
     }
   }
 
-  async handlePendingCallStatus(leadFound: Lead, leadStatus: LeadStatusDTO) {
-    if (leadStatus.status === LeadStatusEnum.CONTACTED) {
-      leadFound.status = LeadStatustype.FUTURE_SALES_OPPORTUNITY;
-   
-      leadFound.dateToCall = null;
-
-      await this.notificationService.sendNotification({
-        title: 'Prospecto contactado',
-        message: `El prospecto ${
-          leadFound.name
-        } ha sido contactado, y se agrego a oportunidad de venta futura y ha sido liberado. ${
-          leadStatus.comment && `obs: ${leadStatus.comment}`
-        }`,
-        userID: leadFound.advisorID,
-        leadID: leadFound._id,
-      });
-      leadFound.advisorID = null;
-
-      await this.notificationService.sendNotificationToAdmin({
-        title: 'Prospecto contactado',
-        message: `El prospecto ${
-          leadFound.name
-        } ha sido contactado, y se agrego a oportunidad de venta futura, y ha sido liberado. ${
-          leadStatus.comment && `obs: ${leadStatus.comment}`
-        }`,
-        leadID: leadFound._id,
-      });
-    }
-  }
-
-  async handleToAssignStatus(leadFound: Lead, leadStatus: LeadStatusDTO) {
-    if (leadStatus.status === LeadStatusEnum.TO_CALL) {
-      if (!leadStatus.advisorID) {
-        throw new ErrorManager({
-          type: 'BAD_REQUEST',
-          message: 'Debes asignar un asesor al prospecto',
-        });
-      }
-
-      const userFound = await this.userService.userExists(leadStatus.advisorID);
-      await this.userService.userIsByRole(userFound, Roles.ADVISOR);
-
-      leadFound.advisorID = leadStatus.advisorID;
-      leadFound.status = LeadStatustype.TO_CALL;
-
-      await this.notificationService.sendNotification({
-        title: 'Nuevo prospecto asignado',
-        message: `Se te ha asignado un nuevo prospecto con el nombre ${leadFound.name}`,
-        userID: leadFound.advisorID,
-        leadID: leadFound._id,
-      });
-
-      await this.notificationService.sendNotificationToAdmin({
-        title: 'Prospecto actualizado',
-        message: `El prospecto ${leadFound.name} ha sido actualizado`,
-        leadID: leadFound._id,
-      });
-    }
-  }
-
-  async handlePotentialToCallStatus(
-    leadFound: Lead,
-    leadStatus: LeadStatusDTO,
-  ) {
-    if (leadStatus.status === LeadStatusEnum.TO_CALL) {
-      if (!leadStatus.advisorID && !leadFound.advisorID) {
-        throw new ErrorManager({
-          type: 'BAD_REQUEST',
-          message: 'Debes asignar un asesor al prospecto',
-        });
-      }
-      if (leadStatus.advisorID) {
-        const userFound = await this.userService.userExists(
-          leadStatus.advisorID,
-        );
-        await this.userService.userIsByRole(userFound, Roles.ADVISOR);
-
-        leadFound.advisorID = leadStatus.advisorID;
-      }
-
-      leadFound.status = LeadStatustype.TO_CALL;
-
-      await this.notificationService.sendNotification({
-        title: 'Nuevo prospecto asignado',
-        message: `Se te ha asignado un nuevo prospecto con el nombre ${
-          leadFound.name
-        },
-         contactalo lo antes posible ${
-           leadStatus.comment && `obs: ${leadStatus.comment}`
-         }`,
-        userID: leadFound.advisorID || leadStatus.advisorID,
-        leadID: leadFound._id,
-      });
-
-      await this.notificationService.sendNotificationToAdmin({
-        title: 'Prospecto actualizado',
-        message: `El prospecto ${leadFound.name} ha sido actualizado`,
-        leadID: leadFound._id,
-      });
-    }
-  }
-
-  // Handle the status of a lead from TO_CALL to PREQUALIFIED
-  async handleToCallStatus(leadFound: Lead, leadStatus: LeadStatusDTO) {
-    if (leadStatus.status === LeadStatusEnum.CONTACTED) {
-      if (!leadStatus.managerID) {
-        throw new ErrorManager({
-          type: 'BAD_REQUEST',
-          message: 'Debes asignar un gerente al prospecto',
-        });
-      }
-
-      await this.userService.userExists(leadStatus.managerID);
-
-      leadFound.managerID = leadStatus.managerID;
-      leadFound.status = LeadStatustype.TO_BUREAU_PREQUALIFIED;
-
-      await this.notificationService.sendNotification({
-        title: 'Prospecto contactado',
-        message: `El prospecto ${leadFound.name} ha sido contactado ${
-          leadStatus.comment && `obs: ${leadStatus.comment}`
-        }`,
-        userID: leadFound.advisorID,
-        leadID: leadFound._id,
-      });
-
-      await this.notificationService.sendNotification({
-        title: 'Prospecto contactado',
-        message: `El prospecto ${leadFound.name} ha sido contactado ${
-          leadStatus.comment && `obs: ${leadStatus.comment}`
-        }, precalificalo lo antes posible`,
-        userID: leadFound.managerID,
-        leadID: leadFound._id,
-      });
-
-      await this.notificationService.sendNotificationToAdmin({
-        title: 'Prospecto contactado',
-        message: `El prospecto ${leadFound.name} ha sido contactado ${
-          leadStatus.comment && `obs: ${leadStatus.comment}`
-        }`,
-        leadID: leadFound._id,
-      });
-    } else if (leadStatus.status === LeadStatusEnum.NOT_CONTACTED) {
-      if (!leadStatus.dateToCall) {
-        throw new ErrorManager({
-          type: 'BAD_REQUEST',
-          message: 'Debes asignar una fecha para llamar al prospecto',
-        });
-      }
-
-      leadFound.dateToCall = leadStatus.dateToCall;
-
-      leadFound.status = LeadStatustype.PENDING_CALL;
-      await this.notificationService.sendNotificationToInvolved(
-        {
-          title: 'Prospecto no contactado',
-          message: `El prospecto ${leadFound.name} no ha sido contactado ${
-            leadStatus.comment && `obs: ${leadStatus.comment}`
-          }`,
-          leadID: leadFound._id,
-        },
-        leadFound,
-      );
-    } else if (leadStatus.status === LeadStatusEnum.DO_NOT_ANSWER) {
-      if (!leadStatus.dateToCall) {
-        throw new ErrorManager({
-          type: 'BAD_REQUEST',
-          message: 'Debes asignar una fecha para llamar al prospecto',
-        });
-      }
-      leadFound.dateToCall = leadStatus.dateToCall;
-      leadFound.status = LeadStatustype.PENDING_CALL;
-
-      await this.notificationService.sendNotificationToInvolved(
-        {
-          title: 'Prospecto no contestO',
-          message: `El prospecto ${leadFound.name} no contesto ${
-            leadStatus.comment && `obs: ${leadStatus.comment}`
-          }`,
-          leadID: leadFound._id,
-        },
-        leadFound,
-      );
-    }
-  }
-
-  // handle the status of a lead from BUREAU_PREQUALIFIED
-  async handleBureauPrequalifiedStatus(
-    leadFound: Lead,
-    leadStatus: LeadStatusDTO,
-  ) {
+  async createComment(id: string, comment: { comment: string }): Promise<Lead> {
     try {
-      if (leadStatus.status === LeadStatusEnum.BUREAU_PREQUALIFIED) {
-        if (!leadStatus.bankManagerID && !leadFound.bankManagerID) {
-          throw new ErrorManager({
-            type: 'BAD_REQUEST',
-            message: 'Debes asignar un gerente de banco al prospecto',
-          });
-        }
-        await this.userService.userExists(leadStatus.bankManagerID);
+      const leadFound = await this.leadExists(id);
+      const userFound = await this.userService.userExists(this.request.idUser);
 
-        if (!leadStatus.bankID) {
-          throw new ErrorManager({
-            type: 'BAD_REQUEST',
-            message: 'Debes asignar un banco al prospecto',
-          });
-        }
+      leadFound.comments.push({
+        comment: comment.comment,
+        date: new Date(),
+        userID: userFound._id,
+      });
 
-        if (!leadStatus.financingProgram) {
-          throw new ErrorManager({
-            type: 'BAD_REQUEST',
-            message: 'Debes asignar un programa financiero al prospecto',
-          });
-        }
+      this.socketGateway.leadUpdated();
+      await this.notificationService.sendNotificationToInvolved({
+        title: 'Nuevo comentario',
+        message: `Se ha agregado un nuevo comentario al prospecto ${leadFound.name}`,
+        leadID: leadFound._id,
+      }, leadFound);
 
-        const bankFound = await this.bankService.bankExists(leadStatus.bankID);
-
-        leadFound.bankManagerID = leadStatus.bankManagerID;
-        leadFound.bankID = leadStatus.bankID;
-        leadFound.financingProgram = leadStatus.financingProgram;
-        leadFound.status = LeadStatustype.TO_BANK_PREQUALIFIED;
-
-        await this.notificationService.sendNotification({
-          title: 'Prospecto precalificado',
-          message: `El prospecto ${
-            leadFound.name
-          } ha sido precalificado y se envio a precalificacion banco ${
-            leadStatus.comment && `obs: ${leadStatus.comment}`
-          }`,
-          userID: leadFound.advisorID,
-          leadID: leadFound._id,
-        });
-
-        await this.notificationService.sendNotification({
-          title: 'Prospecto precalificado',
-          message: `El prospecto ${leadFound.name} ha sido precalificado ${
-            leadStatus.comment && `obs: ${leadStatus.comment}`
-          }, precalificalo lo antes posible\n Banco: ${
-            bankFound.name
-          } \n Programa: ${leadStatus.financingProgram}`,
-          userID: leadFound.bankManagerID,
-          leadID: leadFound._id,
-        });
-
-        await this.notificationService.sendNotificationToAdmin({
-          title: 'Prospecto precalificado',
-          message: `El prospecto ${
-            leadFound.name
-          } ha sido precalificado buro y se envio a precalificacion banco ${
-            leadStatus.comment && `obs: ${leadStatus.comment}`
-          }`,
-          leadID: leadFound._id,
-        });
-      } else if (leadStatus.status === LeadStatusEnum.NOT_BUREAU_PREQUALIFIED) {
-        if (!leadStatus.dateToCall) {
-          throw new ErrorManager({
-            type: 'BAD_REQUEST',
-            message: 'Debes asignar una fecha para llamar al prospecto',
-          });
-        }
-
-        leadFound.dateToCall = leadStatus.dateToCall;
-        leadFound.status = LeadStatustype.PENDING_CALL;
-
-        await this.notificationService.sendNotificationToInvolved(
-          {
-            title: 'Prospecto no precalificado',
-            message: `El prospecto ${leadFound.name} no ha sido precalificado ${
-              leadStatus.comment && `obs: ${leadStatus.comment}`
-            }`,
-            leadID: leadFound._id,
-          },
-          leadFound,
-        );
-      } else if (
-        leadStatus.status === LeadStatusEnum.FUTURE_SALES_OPPORTUNITY
-      ) {
-        if (!leadStatus.dateToCall) {
-          throw new ErrorManager({
-            type: 'BAD_REQUEST',
-            message: 'Debes asignar una fecha para llamar al prospecto',
-          });
-        }
-        leadFound.status = LeadStatustype.PENDING_CALL;
-        leadFound.dateToCall = leadStatus.dateToCall;
-        await this.notificationService.sendNotificationToInvolved(
-          {
-            title: 'Prospecto convertido en oportunidad de venta futura',
-            message: `El prospecto ${
-              leadFound.name
-            } ha sido convertido en oportunidad de venta ${
-              leadStatus.comment && `obs: ${leadStatus.comment}`
-            }`,
-            leadID: leadFound._id,
-          },
-          leadFound,
-        );
-      }
-    } catch (error) {
-      throw ErrorManager.createSignatureError(error.message);
-    }
-  }
-
-  async handleBankPrequalifiedStatus(
-    leadFound: Lead,
-    leadStatus: LeadStatusDTO,
-  ) {
-    try {
-      const bankManager = await this.userService.userExists(
-        leadFound.bankManagerID,
-      );
-      const bank = await this.bankService.bankExists(leadFound.bankID);
-      if (leadStatus.status === LeadStatusEnum.BANK_PREQUALIFIED) {
-        leadFound.status = LeadStatustype.TO_ASSIGN_PROJECT;
-
-        await this.notificationService.sendNotificationToInvolved(
-          {
-            title: 'Prospecto precalificado con banco',
-            message: `${bankManager.name} te notifica que el prospecto ${
-              leadFound.name
-            } SI califica con el banco ${
-              bank.name
-            }, iniciar proceso de seleccionar proyecto. ${
-              leadStatus.comment && `obs: ${leadStatus.comment}`
-            }`,
-            leadID: leadFound._id,
-          },
-          leadFound,
-        );
-      } else if (leadStatus.status === LeadStatusEnum.NOT_BANK_PREQUALIFIED) {
-        leadFound.status = LeadStatustype.TO_BUREAU_PREQUALIFIED;
-        leadFound.rejectedBanks = [
-          ...leadFound.rejectedBanks,
-          leadFound.bankID,
-        ];
-        leadFound.bankID = null;
-        leadFound.financingProgram = null;
-
-        await this.notificationService.sendNotificationToInvolved(
-          {
-            title: 'Prospecto no precalificado',
-            message: `${bankManager.name} te notifica que el prospecto ${
-              leadFound.name
-            } NO califica con el banco ${bank.name} ${
-              leadStatus.comment && `obs: ${leadStatus.comment}`
-            }`,
-            leadID: leadFound._id,
-          },
-          leadFound,
-        );
-      }
-    } catch (error) {
-      throw ErrorManager.createSignatureError(error.message);
-    }
-  }
-
-  async handleToAssignProjectStatus(
-    leadFound: Lead,
-    leadStatus: LeadStatusDTO,
-  ) {
-    try {
-      if (leadStatus.status === LeadStatusEnum.ASSIGN_PROJECT) {
-        if (!leadStatus.projectID) {
-          throw new ErrorManager({
-            type: 'BAD_REQUEST',
-            message: 'Debes asignar un proyecto al prospecto',
-          });
-        }
-
-        if (!leadStatus.lotID) {
-          throw new ErrorManager({
-            type: 'BAD_REQUEST',
-            message: 'Debes asignar un lote al prospecto',
-          });
-        }
-
-        const lotFound = await this.lotService.findOne(leadStatus.lotID);
-
-        if (!lotFound) {
-          throw new ErrorManager({
-            type: 'BAD_REQUEST',
-            message: 'El lote no existe',
-          });
-        }
-
-        if (lotFound.status !== 'Disponible') {
-          throw new ErrorManager({
-            type: 'BAD_REQUEST',
-            message: 'El lote no esta disponible',
-          });
-        }
-
-        leadFound.projectDetails = {
-          projectID: leadStatus.projectID,
-          lotID: leadStatus.lotID,
-        };
-
-        await this.lotService.reserveLot(leadStatus.lotID, leadFound._id);
-        leadFound.status = LeadStatustype.TO_ASSIGN_HOUSE;
-
-        await this.notificationService.sendNotificationToInvolved(
-          {
-            title: 'Prospecto asignado a proyecto',
-            message: `El prospecto ${
-              leadFound.name
-            } ha sido asignado al proyecto ${
-              leadStatus.comment && `obs: ${leadStatus.comment}`
-            }`,
-            leadID: leadFound._id,
-          },
-          leadFound,
-        );
-      } else if (leadStatus.status === LeadStatusEnum.NOT_ASSIGN_PROJECT) {
-        leadFound.status = LeadStatustype.PROSPECT;
-
-        await this.notificationService.sendNotificationToInvolved(
-          {
-            title: 'Prospecto no asignado a proyecto',
-            message: `El prospecto ${
-              leadFound.name
-            } no ha sido asignado a un proyecto ${
-              leadStatus.comment && `obs: ${leadStatus.comment}`
-            }`,
-            leadID: leadFound._id,
-          },
-          leadFound,
-        );
-      }
-    } catch (error) {
-      throw ErrorManager.createSignatureError(error.message);
-    }
-  }
-
-  async handleToAssignHouseStatus(leadFound: Lead, leadStatus: LeadStatusDTO) {
-    try {
-      if (leadStatus.status === LeadStatusEnum.ASSIGN_HOUSE) {
-        if (!leadStatus.houseModel) {
-          throw new ErrorManager({
-            type: 'BAD_REQUEST',
-            message: 'Debes asignar una casa al prospecto',
-          });
-        }
-
-        leadFound.projectDetails = {
-          ...leadFound.projectDetails,
-          houseModel: leadStatus.houseModel,
-        };
-        leadFound.status = LeadStatustype.PROSPECT_DEFINED;
-
-        await this.notificationService.sendNotificationToInvolved(
-          {
-            title: 'Prospecto asignado a casa',
-            message: `El prospecto ${
-              leadFound.name
-            } ha sido asignado a la casa ${
-              leadStatus.comment && `obs: ${leadStatus.comment}`
-            }`,
-            leadID: leadFound._id,
-          },
-          leadFound,
-        );
-      } else if (leadStatus.status === LeadStatusEnum.TO_ASSIGN_PROJECT) {
-        await this.lotService.releaseLot(leadFound.projectDetails.lotID);
-
-        leadFound.status = LeadStatustype.TO_ASSIGN_PROJECT;
-        leadFound.projectDetails = {
-          projectID: null,
-          lotID: null,
-          houseModel: null,
-        };
-
-        await this.notificationService.sendNotificationToInvolved(
-          {
-            title: 'Prospecto no asignado a casa',
-            message: `El prospecto ${
-              leadFound.name
-            } no ha sido asignado a una casa ${
-              leadStatus.comment && `obs: ${leadStatus.comment}`
-            }`,
-            leadID: leadFound._id,
-          },
-          leadFound,
-        );
-      }
-    } catch (error) {
-      throw ErrorManager.createSignatureError(error.message);
-    }
-  }
-
-  async handleProspectDefinedStatus(
-    leadFound: Lead,
-    leadStatus: LeadStatusDTO,
-  ) {
-    try {
-      if (leadStatus.status === LeadStatusEnum.PAYMENT_CONFIRMED) {
-        leadFound.status = LeadStatustype.PAYMENT_CONFIRMED;
-        await this.notificationService.sendNotificationToInvolved(
-          {
-            title: 'Prospecto definido',
-            message: `El prospecto ${
-              leadFound.name
-            } ha confirmado el pago de constancias ${
-              leadStatus.comment && `obs: ${leadStatus.comment}`
-            }`,
-            leadID: leadFound._id,
-          },
-          leadFound,
-        );
-      } else if (leadStatus.status === LeadStatusEnum.NOT_PAYMENT_CONFIRMED) {
-        leadFound.status = LeadStatustype.TO_ASSIGN_PROJECT;
-
-        await this.lotService.releaseLot(leadFound.projectDetails.lotID);
-
-        leadFound.projectDetails = {
-          projectID: null,
-          lotID: null,
-          houseModel: null,
-        };
-
-        await this.notificationService.sendNotificationToInvolved(
-          {
-            title: 'Prospecto no definido',
-            message: `El prospecto ${
-              leadFound.name
-            } no ha confirmado el pago de constancias, se libera el lote ${
-              leadStatus.comment && `obs: ${leadStatus.comment}`
-            }`,
-            leadID: leadFound._id,
-          },
-          leadFound,
-        );
-      }
+      return await leadFound.save();
     } catch (error) {
       throw ErrorManager.createSignatureError(error.message);
     }
@@ -1027,7 +632,7 @@ export class LeadService {
       leadFound.rejectedBanks = leadFound.rejectedBanks.filter(
         (bank) => bank.toString() !== bankFound._id.toString(),
       );
-        this.socketGateway.leadUpdated();
+      this.socketGateway.leadUpdated();
       return await leadFound.save();
     } catch (error) {
       throw ErrorManager.createSignatureError(error.message);
@@ -1035,17 +640,21 @@ export class LeadService {
   }
 
   // Delete a lead by ID
-  async deleteLeadById(id: string){
-
+  async deleteLeadById(id: string) {
     try {
-      const leadFound = await this.leadModel.findById(id);
+      console.log(id);
+      const leadFound = await this.leadModel.findOne({ _id: id });
       if (!leadFound) {
         throw new ErrorManager({
           type: 'NOT_FOUND',
           message: 'Prospecto no encontrado',
         });
       }
+      console.log(leadFound);
 
+      if (leadFound.projectDetails?.lotID) {
+        await this.lotService.releaseLot(leadFound.projectDetails.lotID);
+      }
       await this.notificationService.sendNotificationToInvolved(
         {
           title: 'Prospecto eliminado',
@@ -1055,8 +664,79 @@ export class LeadService {
       );
 
       await this.notificationService.deleteAllNotificationByLeadId(id);
-      return await this.leadModel.findByIdAndDelete(id) 
+      this.socketGateway.leadUpdated();
 
+      // If the lead has a lotID, we release the lot
+      if (leadFound.projectDetails?.lotID)
+        await this.lotService.releaseLot(leadFound.projectDetails.lotID);
+
+      return await this.leadModel.findOneAndDelete({ _id: id });
+    } catch (error) {
+      throw ErrorManager.createSignatureError(error.message);
+    }
+  }
+
+  async deleteComment(id: string, commentID: string): Promise<Lead> {
+    try {
+      const leadFound = await this.leadExists(id);
+      const commentFound = leadFound.comments.find(comment => comment._id.toString() === commentID);
+      if (!commentFound) {
+        throw new ErrorManager({
+          type: 'NOT_FOUND',
+          message: 'Comentario no encontrado',
+        });
+      }
+
+      leadFound.comments = leadFound.comments.filter(comment => comment._id.toString() !== commentID);
+
+      this.socketGateway.leadUpdated();
+      await this.notificationService.sendNotificationToInvolved({
+        title: 'Comentario eliminado',
+        message: `Se ha eliminado un comentario del prospecto ${leadFound.name}`,
+        leadID: leadFound._id,
+      }, leadFound);
+
+      return await leadFound.save();
+    } catch (error) {
+      throw ErrorManager.createSignatureError(error.message);
+    }
+  }
+
+  async deleteDocument(id: string, document: string) {
+    try {
+      const leadFound = await this.leadExists(id);
+      leadFound.documents = leadFound.documents.filter(doc => doc !== document);
+      this.socketGateway.leadUpdated();
+      return await leadFound.save();
+
+    } catch (error) {
+      throw ErrorManager.createSignatureError(error.message);
+    }
+  }
+
+  async updateLeadProjectDetails(id: string, projectDetails: any): Promise<Lead> {
+    try {
+      const leadFound = await this.leadExists(id);
+      const userFound = await this.userService.userExists(this.request.idUser);
+
+
+      leadFound.projectDetails = {
+        lotID: projectDetails.data.lotID,
+        projectID: projectDetails.data.projectID,
+      };
+
+      leadFound.timeline.push({
+        _id: uuid(),
+        updatedBy: userFound.name,
+        status: leadFound.status,
+        title: `Prospecto actualizado`,
+        message: 'Se ha actualizado la información del proyecto',
+        date: new Date(),
+      });
+
+      this.socketGateway.leadUpdated();
+      console.log(leadFound);
+      return await leadFound.save();
     } catch (error) {
       throw ErrorManager.createSignatureError(error.message);
     }
@@ -1110,6 +790,7 @@ export class LeadService {
         }
       });
       Promise.all(leads);
+      this.socketGateway.leadUpdated();
     } catch (error) {
       throw ErrorManager.createSignatureError(error.message);
     }
@@ -1141,72 +822,947 @@ export class LeadService {
           });
         }
       });
+      this.socketGateway.leadUpdated();
     } catch (error) {
       throw ErrorManager.createSignatureError(error.message);
     }
   }
 
-  /*
-   * Check permissions
-   */
 
-  // Check if the user has permission to update the status of a lead
-  checkPermissionToUpdateLeadStatus(status: LeadStatus): boolean {
+  async getLeadsWithoutLot() {
     try {
-      const { roleUser } = this.request;
-
-      if (roleUser === 'ADMIN') {
-        return true;
-      }
-
-      if (!status.role) {
-        return true;
-      }
-
-      if (status.role === roleUser) {
-        return true;
-      }
-
-      throw new ErrorManager({
-        type: 'BAD_REQUEST',
-        message: 'No tienes permisos para actualizar el estado del prospecto',
-      });
+      const leads = await this.leadModel.find({ 'projectDetails.lotID': null }).select('name');
+      return leads;
     } catch (error) {
       throw ErrorManager.createSignatureError(error.message);
     }
   }
 
-  // Check if the user has permission to update a lead
-  checkPermission(roleUser: string, leadFound: Lead, idUser: string) {
-    switch (roleUser) {
-      case 'ADVISOR':
-        if (leadFound.advisorID.toString() !== idUser) {
-          throw new ErrorManager({
-            type: 'BAD_REQUEST',
-            message: 'No tienes permisos para actualizar el prospecto',
-          });
+  async sendNotificationBasedSettings(): Promise<void> {
+    try {
+      // Encuentra leads cuyo estado sea precalificado por banco o buró
+      const leads = await this.leadModel.find({});
+      const maxDaysBank = await this.settingsService.getBankPrequalificationDays(); // Días máximos para precalificación bancaria
+      const maxDaysBureau = await this.settingsService.getBureauPrequalificationDays(); // Días máximos para precalificación del buró
+
+      const today = new Date();
+
+      // Procesamiento de cada lead y manejo de notificaciones
+      const notificationPromises = leads.map(async (lead) => {
+        const lastStatusUpdate = lead.lastStatusUpdate;
+        if (lastStatusUpdate) {
+          const diff = today.getTime() - lastStatusUpdate.getTime();
+          const daysDiff = diff / (1000 * 60 * 60 * 24); // Conversión de milisegundos a días
+
+          if (lead.status.type === LeadStatustype.TO_BANK_PREQUALIFIED.type) {
+            if (daysDiff >= maxDaysBank - 1 && daysDiff < maxDaysBank && maxDaysBank > 0) {
+              // Enviar notificación un día antes de que venza el período de precalificación bancaria
+              await this.notificationService.sendNotification({
+                title: 'Prospecto no precalificado',
+                message: `El prospecto ${lead.name} no ha sido precalificado por el banco, en un día será asignado a otro banco`,
+                userID: lead.bankManagerID,
+                leadID: lead._id,
+              });
+
+              await this.notificationService.sendNotificationToAdmin({
+                title: 'Prospecto no precalificado',
+                message: `El prospecto ${lead.name} no ha sido precalificado por el banco, en un día será asignado a otro banco`,
+                leadID: lead._id,
+              });
+            }
+            if (daysDiff >= maxDaysBank && maxDaysBank > 0) {
+              // Actualizar el estado si el período de precalificación bancaria ha vencido
+              lead.status = LeadStatustype.TO_BUREAU_PREQUALIFIED;
+              lead.lastStatusUpdate = new Date();
+              lead.bankID = null;
+              lead.financingProgram = '';
+              lead.timeline.push({
+                _id: uuid(),
+                updatedBy: 'Sistema',
+                status: lead.status,
+                title: 'Prospecto actualizado',
+                message: 'El prospecto no ha sido precalificado por el banco en el tiempo establecido',
+                date: new Date(),
+              });
+
+              await this.leadModel.updateOne({ _id: lead._id }, lead);
+            }
+          }
+
+          if (lead.status.type === LeadStatustype.TO_BUREAU_PREQUALIFIED.type) {
+            if (daysDiff >= maxDaysBureau - 1 && daysDiff < maxDaysBureau && maxDaysBureau > 0) {
+              // Enviar notificación un día antes de que venza el período de precalificación del buró
+              await this.notificationService.sendNotification({
+                title: 'Prospecto no precalificado',
+                message: `El prospecto ${lead.name} no ha sido precalificado por el buró, en un día será asignado a otro asesor`,
+                userID: lead.advisorID,
+                leadID: lead._id,
+              });
+
+              await this.notificationService.sendNotificationToAdmin({
+                title: 'Prospecto no precalificado',
+                message: `El prospecto ${lead.name} no ha sido precalificado por el buró, en un día será asignado a otro asesor`,
+                leadID: lead._id,
+              });
+            }
+
+            if (daysDiff >= maxDaysBureau && maxDaysBureau > 0) {
+              // Actualizar el estado si el período de precalificación del buró ha vencido
+              const lastAdvisor = await this.userService.getLastAdvisor();
+              lead.status = LeadStatustype.TO_CALL;
+              lead.advisorID = lastAdvisor._id;
+              lead.lastStatusUpdate = new Date();
+              lead.bankID = null;
+              lead.financingProgram = '';
+              lead.timeline.push({
+                _id: uuid(),
+                updatedBy: 'Sistema',
+                status: lead.status,
+                title: 'Prospecto actualizado',
+                message: 'El prospecto no ha sido precalificado por el buró en el tiempo establecido',
+                date: new Date(),
+              });
+              await this.leadModel.updateOne({ _id: lead._id }, lead);
+            }
+          }
         }
-        break;
-      case 'MANAGER':
-        if (leadFound.managerID.toString() !== idUser) {
-          throw new ErrorManager({
-            type: 'BAD_REQUEST',
-            message: 'No tienes permisos para actualizar el lead',
-          });
-        }
-        break;
-      case 'BANK_MANAGER':
-        if (leadFound.bankManagerID.toString() !== idUser) {
-          throw new ErrorManager({
-            type: 'BAD_REQUEST',
-            message: 'No tienes permisos para actualizar el lead',
-          });
-        }
-        break;
-      case 'ADMIN':
-        break;
-      default:
-        break;
+      });
+
+      // Esperar a que todas las promesas se resuelvan
+      await Promise.all(notificationPromises);
+
+    } catch (error) {
+      throw ErrorManager.createSignatureError(error.message);
     }
   }
+  async getCurrentGoalsAndStatusByUserID(userId: string) {
+    try {
+      const user = await this.userService.getUserById(userId);
+      const currentGoals = await this.settingsService.getCurrentGoals();
+      let payload = {
+        generalGoals: null,
+        generalGoalsStatus: 0,
+        individualGoals: null,
+        individualGoalsStatus: 0
+      };
+      const leadsCreatedAndAssignedByUser = await this.getLeadsByUserID(userId);
+      const allLeads = await this.getAllLeads();
+
+      let filterLeadInsideGeneralGoals;
+      if (currentGoals.generalGoals) {
+        filterLeadInsideGeneralGoals = allLeads.filter(lead => lead.createdAt >= currentGoals.generalGoals.startDate && lead.createdAt <= currentGoals.generalGoals.endDate);
+        payload = {
+          ...payload,
+          generalGoals: currentGoals.generalGoals,
+          generalGoalsStatus: filterLeadInsideGeneralGoals.length
+        }
+      } else {
+        payload = {
+          ...payload,
+          generalGoals: null,
+          generalGoalsStatus: 0
+        }
+      }
+
+
+
+
+      let filterLeadInsideIndividualGoals;
+      if (currentGoals.individualGoals) {
+        filterLeadInsideIndividualGoals = leadsCreatedAndAssignedByUser.filter(lead => lead.createdAt >= currentGoals.individualGoals.startDate && lead.createdAt <= currentGoals.individualGoals.endDate);
+        payload = {
+          ...payload,
+          individualGoals: currentGoals.individualGoals,
+          individualGoalsStatus: filterLeadInsideIndividualGoals.length
+        }
+        const type = payload.individualGoalsStatus >= currentGoals.individualGoals.target ? "add" : "remove";
+
+      } else {
+        payload = {
+          ...payload,
+          individualGoals: null,
+          individualGoalsStatus: 0
+        }
+
+
+
+
+      }
+
+
+
+
+      return payload;
+
+    } catch (error) {
+      throw new ErrorManager.createSignatureError(error.message);
+
+    }
+  }
+
+  // Dashboard services
+
+  async getDashboardData(intervalStatus: {
+    startDate?: Date;
+    endDate?: Date;
+  }): Promise<any> {
+    try {
+      const userRole = this.request.roleUser;
+      const userId = this.request.idUser; // Asumo que tienes acceso al ID del usuario en el request
+      // Filtro base para todos los leads (general o por asesor)
+      // convert userId to objectID
+      const matchFilter = userRole === 'ADVISOR' ? { advisorID: new mongoose.Types.ObjectId(userId) } : {};
+      // const matchFilter = userRole === 'ADVISOR' ? { advisorID: userId.toString() } : {};
+
+      // Total de leads
+      const totalLeads = await this.leadModel.countDocuments(matchFilter);
+
+      // Leads por status en un rango de fechas (si se especifica)
+      let leadsStatusByDate;
+      if (intervalStatus.startDate && intervalStatus.endDate) {
+        leadsStatusByDate = await this.leadModel.aggregate([
+          { $match: { ...matchFilter, timeline: { $elemMatch: { date: { $gte: new Date(intervalStatus.startDate), $lte: new Date(intervalStatus.endDate) } } } } },
+          { $group: { _id: '$status.type', count: { $sum: 1 } } },
+        ]);
+      }
+
+      // Leads por status (general)
+      const leadsByStatus = await this.leadModel.aggregate([
+        { $match: matchFilter },
+        { $group: { _id: '$status', count: { $sum: 1 } } },
+      ]);
+
+      // Leads por edad
+      const leadsByAge = await this.leadModel.aggregate([
+        { $match: matchFilter },
+        { $group: { _id: '$birthdate', count: { $sum: 1 } } },
+      ]);
+
+      // Leads por país
+      const leadsByCountry = await this.leadModel.aggregate([
+        { $match: matchFilter },
+        { $group: { _id: '$country', count: { $sum: 1 } } },
+      ]);
+
+      // Leads por ciudad
+      const leadsByCity = await this.leadModel.aggregate([
+        { $match: matchFilter },
+        { $group: { _id: '$department', count: { $sum: 1 } } },
+      ]);
+
+      const leadsByMunicipality = await this.leadModel.aggregate([
+        { $match: matchFilter },
+        { $group: { _id: '$municipality', count: { $sum: 1 } } },
+      ]);
+
+      // Leads por asesor (solo si no es ADVISOR)
+      const leadsByAdvisor = userRole !== 'ADVISOR' ? await this.leadModel.aggregate([
+        { $group: { _id: '$advisorID', count: { $sum: 1 } } },
+        { $lookup: { from: 'users', localField: '_id', foreignField: '_id', as: 'advisor' } },
+        { $unwind: '$advisor' },
+        { $project: { advisor: '$advisor.name', count: 1 } },
+      ]) : [];
+
+      // Leads por canal
+      const leadsByChannel = await this.leadModel.aggregate([
+        { $match: matchFilter },
+        { $group: { _id: '$source', count: { $sum: 1 } } },
+      ]);
+
+      // Leads pendientes de llamada
+      const leadsPendingCall = await this.leadModel.countDocuments({ ...matchFilter, status: LeadStatustype.PENDING_CALL });
+
+      // Leads por bancos
+      const leadsByBanks = await this.leadModel.aggregate([
+        { $match: matchFilter },
+        { $group: { _id: '$bankID', count: { $sum: 1 } } },
+      ]);
+      const populateBanks = await this.leadModel.populate(leadsByBanks, { path: '_id', select: 'name', model: 'Bank' });
+
+
+      const currentGoals = await this.getCurrentGoalsAndStatusByUserID(userId);
+      const payload = {
+        totalLeads,
+        leadsByBanks: populateBanks,
+        leadsByStatus: leadsByStatus.map((item: any) => ({ status: item._id.type, count: item.count })),
+        leadsByAge,
+        leadsByCountry,
+        leadsByCity,
+        leadsByChannel,
+        leadsPendingCall,
+        leadsByAdvisor,
+        leadsStatusByDate,
+        currentGoals,
+        leadsByMunicipality
+      };
+
+
+
+
+
+      return payload;
+    } catch (error) {
+      throw ErrorManager.createSignatureError(error.message);
+    }
+  }
+
+  async exportData(format: string): Promise<Buffer> {
+    try {
+      const data = await this.getDashboardData({});
+      switch (format) {
+        case 'pdf':
+          const pdf = await this.generatePdf(data);
+          return pdf;
+        case 'excel':
+          const excel = await this.generateExcel(data);
+          return excel;
+        case 'csv':
+          const csv = await this.generateCSV(data);
+          return csv;
+        default:
+          throw ErrorManager.createSignatureError('Formato no válido');
+      }
+
+    } catch (error) {
+      throw ErrorManager.createSignatureError(error.message);
+    }
+  }
+
+  // data example 
+  /**
+  {
+    "totalLeads": 11,
+    "leadsByBanks": [
+        {
+            "_id": null,
+            "count": 9
+        },
+        {
+            "_id": {
+                "_id": "656236572ca62e6c26437f71",
+                "name": "Banco Atlantida"
+            },
+            "count": 2
+        }
+    ],
+    "leadsByStatus": [
+        {
+            "status": "A Contactar",
+            "count": 6
+        },
+        {
+            "status": "Por Asignar",
+            "count": 3
+        },
+        {
+            "status": "Enviado a revisión 1era Etapa",
+            "count": 1
+        },
+        {
+            "status": "Por Asignar Modelo de Casa",
+            "count": 1
+        }
+    ],
+    "leadsByAge": [
+        {
+            "_id": "",
+            "count": 5
+        },
+        {
+            "_id": "2000-02-25",
+            "count": 1
+        },
+        {
+            "_id": "2024-08-16",
+            "count": 1
+        },
+        {
+            "_id": "2024-07-18",
+            "count": 1
+        },
+        {
+            "_id": "1999-02-23",
+            "count": 1
+        },
+        {
+            "_id": "2024-06-11",
+            "count": 1
+        },
+        {
+            "_id": "2024-07-26",
+            "count": 1
+        }
+    ],
+    "leadsByCountry": [
+        {
+            "_id": "El Salvador",
+            "count": 1
+        },
+        {
+            "_id": "",
+            "count": 1
+        },
+        {
+            "_id": "Otro",
+            "count": 1
+        },
+        {
+            "_id": "Guatemala",
+            "count": 4
+        },
+        {
+            "_id": "Honduras",
+            "count": 4
+        }
+    ],
+    "leadsByCity": [
+        {
+            "_id": "Otro",
+            "count": 1
+        },
+        {
+            "_id": "",
+            "count": 3
+        },
+        {
+            "_id": "Quetzaltenango",
+            "count": 1
+        },
+        {
+            "_id": "La Paz",
+            "count": 1
+        },
+        {
+            "_id": "Atlántida",
+            "count": 1
+        },
+        {
+            "_id": "Comayagua",
+            "count": 2
+        },
+        {
+            "_id": "Surf city",
+            "count": 1
+        },
+        {
+            "_id": "Valle",
+            "count": 1
+        }
+    ],
+    "leadsByChannel": [
+        {
+            "_id": "Facebook",
+            "count": 10
+        },
+        {
+            "_id": "",
+            "count": 1
+        }
+    ],
+    "leadsPendingCall": 0,
+    "leadsByAdvisor": [
+        {
+            "_id": "65b28c533d04a775216da580",
+            "count": 5,
+            "advisor": "Miguel Baires J"
+        },
+        {
+            "_id": "65b28c7f3d04a775216da5a2",
+            "count": 4,
+            "advisor": "Pablo Ramirez"
+        }
+    ],
+    "currentGoals": {
+        "generalGoals": {
+            "_id": "66baed30fa9879d887d5196e",
+            "name": "Referidos",
+            "description": "",
+            "target": 30,
+            "newLeads": [],
+            "startDate": "2024-08-01T00:00:00.000Z",
+            "endDate": "2024-08-31T00:00:00.000Z"
+        },
+        "generalGoalsStatus": 3,
+        "individualGoals": null,
+        "individualGoalsStatus": 0
+    }
+}
+   */
+async generateExcel(data: any): Promise<Buffer> {
+  return new Promise(async (resolve, reject) => {
+    try {
+      const workbook = new ExcelJS.Workbook();
+
+      // Function to add a header row
+      function addHeader(worksheet: ExcelJS.Worksheet, title: string) {
+        worksheet.addRow([title]);
+        worksheet.getCell(`A${worksheet.lastRow.number}`).font = { bold: true };
+        worksheet.addRow([]);
+      }
+
+      // Function to add a table with headers
+      function addTable(
+        worksheet: ExcelJS.Worksheet,
+        title: string,
+        headers: string[],
+        rows: any[][],
+      ) {
+        addHeader(worksheet, title);
+
+        // Add table headers
+        const headerRow = worksheet.addRow(headers);
+        headerRow.font = { bold: true };
+        headerRow.eachCell((cell) => {
+          cell.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: 'C6EFCE' }, // Light green color for header
+          };
+          cell.alignment = { horizontal: 'center' };
+        });
+
+        // Adjust column widths
+        worksheet.columns = headers.map(() => ({ width: 25 }));
+
+        // Add rows to the table
+        rows.forEach((row) => worksheet.addRow(row));
+
+      }
+      // Add Leads by Banks Table
+      if (data.leadsByBanks && data.leadsByBanks.length > 0) {
+        const banksSheet = workbook.addWorksheet('Leads por Banco');
+        addTable(banksSheet, 'Leads por Banco', ['Banco', 'Cantidad'], 
+          data.leadsByBanks.map((lead: any) => [
+            lead._id ? lead._id.name : 'No Especificado',
+            lead.count,
+          ])
+        );
+      }
+
+      // Add Leads by Status Table
+      if (data.leadsByStatus && data.leadsByStatus.length > 0) {
+        const statusSheet = workbook.addWorksheet('Leads por Status');
+        addTable(statusSheet, 'Leads por Status', ['Status', 'Cantidad'], 
+          data.leadsByStatus.map((lead: any) => [
+            lead.status,
+            lead.count,
+          ])
+        );
+      }
+
+      // Add Leads by Age Table
+      if (data.leadsByAge && data.leadsByAge.length > 0) {
+        const ageGroupedByAge = data.leadsByAge.reduce((acc: any, lead: any) => {
+          const date = lead._id ? lead._id : 'No Especificado';
+          const age = new Date().getFullYear() - new Date(date).getFullYear();
+          const ageGroup = this.getAgeGroup(age);
+          if (!acc[ageGroup]) acc[ageGroup] = 0;
+          acc[ageGroup] += lead.count;
+          return acc;
+        }, {});
+
+        const ageSheet = workbook.addWorksheet('Leads por Edad');
+        addTable(ageSheet, 'Leads por Edad', ['Fecha de Nacimiento', 'Cantidad'],
+          Object.entries(ageGroupedByAge).map(([age, count]: any) => [age, count])
+        );
+      }
+
+      // Add Leads by Country Table
+      if (data.leadsByCountry && data.leadsByCountry.length > 0) {
+        const countrySheet = workbook.addWorksheet('Leads por País');
+        addTable(countrySheet, 'Leads por País', ['País', 'Cantidad'],
+          data.leadsByCountry.map((lead: any) => [
+            lead._id ? lead._id : 'No Especificado',
+            lead.count,
+          ])
+        );
+      }
+
+      // Add Leads by City Table
+      if (data.leadsByCity && data.leadsByCity.length > 0) {
+        const citySheet = workbook.addWorksheet('Leads por Ciudad');
+        addTable(citySheet, 'Leads por Ciudad', ['Ciudad', 'Cantidad'],
+          data.leadsByCity.map((lead: any) => [
+            lead._id ? lead._id : 'No Especificado',
+            lead.count,
+          ])
+        );
+      }
+
+      // Add Leads by Channel Table
+      if (data.leadsByChannel && data.leadsByChannel.length > 0) {
+        const channelSheet = workbook.addWorksheet('Leads por Canal');
+        addTable(channelSheet, 'Leads por Canal', ['Canal', 'Cantidad'],
+          data.leadsByChannel.map((lead: any) => [
+            lead._id ? lead._id : 'No Especificado',
+            lead.count,
+          ])
+        );
+      }
+
+      // Add Leads by Advisor Table
+      if (data.leadsByAdvisor && data.leadsByAdvisor.length > 0) {
+        const advisorSheet = workbook.addWorksheet('Leads por Asesor');
+        addTable(advisorSheet, 'Leads por Asesor', ['Asesor', 'Cantidad'],
+          data.leadsByAdvisor.map((lead: any) => [
+            lead.advisor,
+            lead.count,
+          ])
+        );
+      }
+
+      // Write to buffer
+      const buffer = await workbook.xlsx.writeBuffer();
+      const bufferData = Buffer.from(buffer);
+      resolve(bufferData);
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+async generatePdf(data: any): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({
+      size: 'A4',
+      margin: 50,
+    });
+
+    const buffers: any[] = [];
+    doc.on('data', buffers.push.bind(buffers));
+    doc.on('end', () => {
+      const pdfData = Buffer.concat(buffers);
+      resolve(pdfData);
+    });
+   
+
+    function addFooter(doc: any) {
+      doc.fontSize(10)
+        .text('Página ' + (doc.page.pageNumber), 50, 750, { align: 'center' });
+
+      doc.text("", 50, 115)
+    }
+
+
+    // Function to add header
+    function addHeader(doc: any) {
+      doc.image('src/assets/logo.png', 50, 45, { width: 50 })
+        .fillColor('#444444')
+        .fontSize(20)
+        .font('Helvetica-Bold')
+        .text('Reporte de Prospectos', 130, 57).moveDown()
+        .fontSize(10)
+        .font('Helvetica')
+        .text('Reporte generado por el sistema CRM de Sig-Urban', 130, 85)
+        // format the date dd/mm/yyyy
+        .text('Fecha de generación: ' + new Date().toLocaleDateString("es-ES", { year: 'numeric', month: '2-digit', day: '2-digit' }), 130, 100)
+        .text("", 50, 115)
+    }
+
+    // Function to add footer with page number
+    function checkIfBreakPage(doc: any) {
+      if (doc.y > doc.page.height - 250) { // Adjust if necessary
+       addNewPage(doc);
+      }
+    }
+
+    // Function to add a new page and header
+    function addNewPage(doc: any) {
+      doc.addPage();
+      addHeader(doc);
+    }
+
+    let currentPage = 1;
+
+    // Function to check space and add content
+    function checkSpaceAndAddContent(doc: any, content: Function) {
+      if (doc.y > doc.page.height - 250) { // Adjust if necessary
+        addNewPage(doc);
+        currentPage++;
+      }
+      content();
+    }
+
+    // Add header for the first page
+    addHeader(doc);
+
+    // Add content
+    checkSpaceAndAddContent(doc, () => {
+      if (data.totalLeads) {
+        doc.fontSize(12)
+        .font('Helvetica-Bold')
+        .text('Informe General', 50, 140)
+        .font('Helvetica')
+      }
+    });
+    // Leads by Banks Table
+    if (data.leadsByBanks && data.leadsByBanks.length > 0) {
+      checkSpaceAndAddContent(doc, () => {
+        const leadsByBanksTable = {
+          headers: ['Banco', 'Cantidad'],
+          rows: data.leadsByBanks.map((lead: any) => {
+            // checkIfBreakPage(doc);
+            return [
+              lead._id ? lead._id.name : 'No Especificado',
+              lead.count,
+            ];
+          }),
+        };
+
+        doc.fontSize(12).moveDown(3);
+        doc.font('Helvetica-Bold').text('Leads por Banco');
+        doc.font('Helvetica').fontSize(10).text('Se muestra la cantidad de leads por cada banco');
+        doc.moveDown().table(leadsByBanksTable, { columnsSize: [300, 200] });
+      });
+    }
+
+    // Leads by Status Table
+    if (data.leadsByStatus && data.leadsByStatus.length > 0) {
+      checkSpaceAndAddContent(doc, () => {
+        const leadsByStatusTable = {
+          headers: ['Status', 'Cantidad'],
+          rows: data.leadsByStatus.map((lead: any) =>{
+            // checkIfBreakPage(doc);
+            return [
+              lead.status,
+              lead.count,
+            ];
+          }),
+        };
+
+        doc.fontSize(12).moveDown(3);
+        doc.font('Helvetica-Bold').text('Leads por Status');
+        doc.font('Helvetica').fontSize(10).text('Se muestra la cantidad de leads por cada estado');
+        doc.moveDown().table(leadsByStatusTable, { columnsSize: [300, 200], prepareHeader: () => doc.font('Helvetica-Bold') });
+      });
+    }
+
+
+    // Leads by Age Table
+    if (data.leadsByAge && data.leadsByAge.length > 0) {
+      checkSpaceAndAddContent(doc, () => {
+        const leadsAgroupedByAge = data.leadsByAge.reduce((acc: any, lead: any) => {
+          const date = lead._id ? lead._id : 'No Especificado';
+          const age = new Date().getFullYear() - new Date(date).getFullYear();
+          const ageGroup = this.getAgeGroup(age);
+          if (!acc[ageGroup]) acc[ageGroup] = 0;
+          acc[ageGroup] += lead.count;
+          return acc;
+        }, {});
+
+        const leadsByAgeTable = {
+          headers: ['Fecha de Nacimiento', 'Cantidad'],
+          rows: Object.entries(leadsAgroupedByAge).map(([age, count]: any) => {
+            // checkIfBreakPage(doc);
+            return [
+              age,
+              count,
+            ];
+          }),
+        };
+
+        doc.fontSize(12).moveDown(3);
+        doc.font('Helvetica-Bold').text('Leads por Edad');
+        doc.font('Helvetica').fontSize(10).text('Se muestra la cantidad de leads por rango de edad');
+        doc.moveDown().table(leadsByAgeTable, { columnsSize: [300, 200], prepareHeader: () => doc.font('Helvetica-Bold') });
+      });
+    }
+
+    // Leads by Country Table
+    if (data.leadsByCountry && data.leadsByCountry.length > 0) {
+      checkSpaceAndAddContent(doc, () => {
+        const leadsByCountryTable = {
+          headers: ['País', 'Cantidad'],
+          rows: data.leadsByCountry.map((lead: any) => {
+            // checkIfBreakPage(doc);
+            return [
+              lead._id ? lead._id : 'No Especificado',
+              lead.count,
+            ];
+          }),
+        };
+
+        doc.fontSize(12).moveDown(3);
+        doc.font('Helvetica-Bold').text('Leads por País');
+        doc.font('Helvetica').fontSize(10).text('Se muestra la cantidad de leads por país');
+        doc.moveDown().table(leadsByCountryTable, { columnsSize: [300, 200], prepareHeader: () => doc.font('Helvetica-Bold') });
+      });
+    }
+
+    // Leads by City Table
+    if (data.leadsByCity && data.leadsByCity.length > 0) {
+      checkSpaceAndAddContent(doc, () => {
+        const leadsByCityTable = {
+          headers: ['Ciudad', 'Cantidad'],
+          rows: data.leadsByCity.map((lead: any) => {
+            // checkIfBreakPage(doc);
+            return [
+              lead._id ? lead._id : 'No Especificado',
+              lead.count,
+            ];
+          }),
+        };
+
+        doc.fontSize(12).moveDown(3);
+        doc.font('Helvetica-Bold').text('Leads por Ciudad');
+        doc.font('Helvetica').fontSize(10).text('Se muestra la cantidad de leads por ciudad');
+        doc.moveDown().table(leadsByCityTable, { columnsSize: [300, 200], prepareHeader: () => doc.font('Helvetica-Bold') });
+      });
+    }
+
+    // Leads by Channel Table
+    if (data.leadsByChannel && data.leadsByChannel.length > 0) {
+      checkSpaceAndAddContent(doc, () => {
+        const leadsByChannelTable = {
+          headers: ['Canal', 'Cantidad'],
+          rows: data.leadsByChannel.map((lead: any) => {
+            // checkIfBreakPage(doc);
+            return [
+              lead._id ? lead._id : 'No Especificado',
+              lead.count,
+            ];
+          }),
+        };
+
+        doc.fontSize(12).moveDown(3);
+        doc.font('Helvetica-Bold').text('Leads por Canal');
+        doc.font('Helvetica').fontSize(10).text('Se muestra la cantidad de leads por canal');
+        doc.moveDown().table(leadsByChannelTable, { columnsSize: [300, 200], prepareHeader: () => doc.font('Helvetica-Bold') });
+      });
+    }
+    // check if is new page
+  
+
+    // Leads by Advisor Table
+    if (data.leadsByAdvisor && data.leadsByAdvisor.length > 0) {
+      checkSpaceAndAddContent(doc, () => {
+        const leadsByAdvisorTable = {
+          headers: ['Asesor', 'Cantidad'],
+          rows: data.leadsByAdvisor.map((lead: any) => {
+            // checkIfBreakPage(doc);
+            return [
+              lead.advisor,
+              lead.count,
+            ];
+          }),
+        };
+
+        doc.fontSize(12).moveDown(3);
+        doc.font('Helvetica-Bold').text('Leads por Asesor');
+        doc.font('Helvetica').fontSize(10).text('Se muestra la cantidad de leads por asesor');
+        doc.moveDown().table(leadsByAdvisorTable, { columnsSize: [300, 200], prepareHeader: () => doc.font('Helvetica-Bold') });
+      });
+    }
+    
+    // Finish the document
+    doc.end();
+  });
+}
+  getAgeGroup(ageNumber: number): string {
+
+    if (!ageNumber && ageNumber !== 0) return 'No Especificado';
+    if (ageNumber < 18) return '<18';
+    if (ageNumber >= 18 && ageNumber <= 25) return '18-25';
+    if (ageNumber >= 26 && ageNumber <= 35) return '26-35';
+    if (ageNumber >= 36 && ageNumber <= 45) return '36-45';
+    if (ageNumber >= 46 && ageNumber <= 55) return '46-55';
+    if (ageNumber >= 56 && ageNumber <= 65) return '56-65';
+    return '>65';
+  }
+  
+  async generateCSV(data: any): Promise<Buffer> {
+    return new Promise((resolve, reject) => {
+      try {
+        let csvContent = '';
+  
+        // Function to add a table to the CSV content
+        function addTable(title: string, headers: string[], rows: any[][], total: number) {
+          // Add title
+          csvContent += `${title}\n`;
+  
+          // Add headers
+          csvContent += headers.join(',') + '\n';
+  
+          // Add rows
+          rows.forEach(row => {
+            csvContent += row.join(',') + '\n';
+          });
+  
+          // Add total row
+          csvContent += `Total:,${total}\n\n`;
+        }
+  
+        // Leads by Banks Table
+        if (data.leadsByBanks && data.leadsByBanks.length > 0) {
+          const totalLeadsByBanks = data.leadsByBanks.reduce((acc: number, lead: any) => acc + lead.count, 0);
+          addTable(
+            'Leads por Banco',
+            ['Banco', 'Cantidad'],
+            data.leadsByBanks.map((lead: any) => [lead._id ? lead._id.name : 'No Especificado', lead.count]),
+            totalLeadsByBanks
+          );
+        }
+  
+        // Leads by Status Table
+        if (data.leadsByStatus && data.leadsByStatus.length > 0) {
+          const totalLeadsByStatus = data.leadsByStatus.reduce((acc: number, lead: any) => acc + lead.count, 0);
+          addTable(
+            'Leads por Status',
+            ['Status', 'Cantidad'],
+            data.leadsByStatus.map((lead: any) => [lead.status, lead.count]),
+            totalLeadsByStatus
+          );
+        }
+  
+        // Leads by Age Table
+        if (data.leadsByAge && data.leadsByAge.length > 0) {
+          const leadsGroupedByAge = data.leadsByAge.reduce((acc: any, lead: any) => {
+            const date = lead._id ? lead._id : 'No Especificado';
+            const age = new Date().getFullYear() - new Date(date).getFullYear();
+            const ageGroup = this.getAgeGroup(age);
+            if (!acc[ageGroup]) acc[ageGroup] = 0;
+            acc[ageGroup] += lead.count;
+            return acc;
+          }, {});
+  
+          const totalLeadsByAge = Object.values(leadsGroupedByAge).reduce((acc: number, count: any) => acc + count, 0);
+          addTable(
+            'Leads por Edad',
+            ['Grupo de Edad', 'Cantidad'],
+            Object.entries(leadsGroupedByAge).map(([age, count]: any) => [age, count]),
+            totalLeadsByAge as number
+          );
+        }
+  
+        // Leads by Country Table
+        if (data.leadsByCountry && data.leadsByCountry.length > 0) {
+          const totalLeadsByCountry = data.leadsByCountry.reduce((acc: number, lead: any) => acc + lead.count, 0);
+          addTable(
+            'Leads por País',
+            ['País', 'Cantidad'],
+            data.leadsByCountry.map((lead: any) => [lead._id ? lead._id : 'No Especificado', lead.count]),
+            totalLeadsByCountry
+          );
+        }
+  
+        // Leads by City Table
+        if (data.leadsByCity && data.leadsByCity.length > 0) {
+          const totalLeadsByCity = data.leadsByCity.reduce((acc: number, lead: any) => acc + lead.count, 0);
+          addTable(
+            'Leads por Ciudad',
+            ['Ciudad', 'Cantidad'],
+            data.leadsByCity.map((lead: any) => [lead._id ? lead._id : 'No Especificado', lead.count]),
+            totalLeadsByCity
+          );
+        }
+  
+        // Convert CSV content to Buffer and resolve
+        const buffer = Buffer.from(csvContent, 'utf-8');
+        resolve(buffer);
+      } catch (error) {
+        reject(error);
+      }
+    });
+  }
+  
 }

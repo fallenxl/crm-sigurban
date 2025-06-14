@@ -2,10 +2,10 @@ import { Schema, Prop, SchemaFactory } from '@nestjs/mongoose';
 import { lotStatus } from '../interfaces/project.interfaces';
 import mongoose from 'mongoose';
 
-interface Models {
+class Models {
   model: string;
-  area: number;
-  price: number;
+  area: number ;
+  price: number ;
   priceWithDiscount: number;
 }
 
@@ -34,9 +34,16 @@ export class Project {
 
     @Prop({
         default: [],
+        type: Array<Models>,
     })
 
   models: Models[];
+
+    @Prop({
+        type: String,
+        trim: true,
+    })
+  svg?: string;
 
 }
 

@@ -12,6 +12,7 @@ import { Lead } from 'src/modules/lead/schemas/lead.schemas';
 import { LeadStatustype } from 'src/modules/lead/interfaces';
 import { NotificationService } from '../../notification/services/notification.service';
 import * as bcrypt from 'bcrypt';
+import { Goal } from 'src/modules/settings/schemas/settings.schema';
 @Global()
 @Injectable({ scope: Scope.REQUEST })
 export class UsersService {
@@ -20,6 +21,7 @@ export class UsersService {
     @InjectModel(Lead.name) private readonly leadModel: Model<Lead>,
     @Inject(REQUEST) private readonly request: Request,
     private readonly notificationService: NotificationService,
+    
   ) {}
 
   // Create a new user
@@ -39,6 +41,7 @@ export class UsersService {
     }
   }
 
+
   // Get all users
   async getAllUser(): Promise<User[]> {
     try {
@@ -56,6 +59,11 @@ export class UsersService {
     } catch (error) {
       throw ErrorManager.createSignatureError(error.message);
     }
+  }
+
+  getUsersAsAdvisor(): Promise<User[]> {
+    return this.userModel.find({ role: [Roles.ADVISOR, Roles.BANK_MANAGER, Roles.MANAGER], status: true });
+
   }
 
   // Get a user by email
@@ -208,6 +216,49 @@ export class UsersService {
     }
   }
 
+  async toggleNotificationsSound(id: string) {
+    try {
+      const userFound = await this.userExists(id);
+      userFound.settings.notificationsSound = !userFound.settings.notificationsSound;
+      const updatedUser = await this.userModel.findByIdAndUpdate(
+        id,
+        userFound,
+        {
+          new: true,
+        },
+      );
+      return {
+        msg: 'Ha cambiado el estado de sonido de notificaciones',
+        notificationsSound: updatedUser.settings.notificationsSound,
+      };
+    } catch (error) {
+      throw ErrorManager.createSignatureError(error.message);
+    }
+  }
+  async getUserSettings(id: string) {
+    try {
+      const userFound = await this.userExists(id);
+      return userFound.settings;
+    } catch (error) {
+      throw ErrorManager.createSignatureError(error.message);
+    }
+  }
+
+  async updateUserSettings(id: string, settings: any) {
+    try {
+      const userFound = await this.userExists(id);
+      console.log(settings);
+
+      userFound.settings = settings;
+      return await this.userModel.findByIdAndUpdate(id, userFound, {
+        new: true,
+      });
+    } catch (error) {
+      throw ErrorManager.createSignatureError(error.message);
+    }
+  }
+
+
   async getUserAutoAssign(id: string) {
     try {
       const userFound = await this.getUserById(id);
@@ -250,4 +301,52 @@ export class UsersService {
       throw ErrorManager.createSignatureError(error.message);
     }
   }
+
+  async getGoatInCompleted(userId: string, goal: Goal): Promise<boolean> {
+    try {
+      const userFound = await this.userExists(userId);
+      const goalsCompleted = userFound.goalsCompleted??[] as Goal[];
+      return goalsCompleted.find((g) => g._id === goal._id) ? true : false;
+    } catch (error) {
+      throw ErrorManager.createSignatureError(error.message);
+    }
+  }
+
+  async setGoalForAdvisor(userId: string, goal:Goal, action: 'add' | 'remove') {
+    try {
+      const userFound = await this.userExists(userId);
+      let goalsCompleted = userFound.goalsCompleted??[] as Goal[];
+      const exist = await this.getGoatInCompleted(userId, goal);
+      if (action === 'add') {;
+        if(!exist){
+          goalsCompleted.push(goal);
+        }
+      } else {
+        
+        if(exist){
+          goalsCompleted = goalsCompleted.filter((g) => g._id !== goal._id);
+        }
+      }
+     
+      return  await this.userModel.findByIdAndUpdate(userId, { goalsCompleted }, {
+        new: true,
+      });
+        } catch (error) {
+      throw ErrorManager.createSignatureError(error.message);
+    }
+  }
+
+  async setUserAvatar(userId: string, avatar: string) {
+    try {
+      const userFound = await this.userExists(userId);
+      userFound.avatar = avatar;
+      
+      return await this.userModel.findByIdAndUpdate(userId, userFound, {
+        new: true,
+      });
+    } catch (error) {
+      throw ErrorManager.createSignatureError(error.message);
+    }
+  }
+
 }

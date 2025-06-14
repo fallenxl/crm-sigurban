@@ -7,6 +7,21 @@ import {
 } from '../interfaces';
 import mongoose from 'mongoose';
 
+
+
+@Schema()
+class UserComment {
+  _id?: string;
+  @Prop({ trim: true })
+  comment: string;
+
+  @Prop({ trim: true })
+  date: Date;
+
+  @Prop({ trim: true, type: mongoose.Schema.Types.ObjectId, ref: 'User' })
+  userID: string;
+}
+
 @Schema({ timestamps: true })
 export class Lead {
   _id: string;
@@ -15,16 +30,18 @@ export class Lead {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     nullable: true,
-    isRequired: false,
+    required: false,
   })
   advisorID?: string;
 
   @Prop({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Campaign',
-    required: true,
+    nullable: true,
+    required: false,
+    default: null,
   })
-  campaignID: string;
+  campaignID?: string;
 
   @Prop({ trim: true, default: '' })
   avatar?: string;
@@ -37,9 +54,18 @@ export class Lead {
 
   @Prop({ required: true })
   phone: string;
+  @Prop({ required: false })
+  birthdate: string;
 
-  @Prop({ trim: true, required: true, unique: true })
-  dni: string;
+
+  @Prop({ trim: true, default: '' })
+  dni?: string;
+
+  @Prop({ trim: true, default: '' })
+  passport?: string;
+
+  @Prop({ trim: true, default: '' })
+  residenceNumber?: string;
 
   @Prop({ trim: true, default: '' })
   address?: string;
@@ -51,10 +77,17 @@ export class Lead {
   department?: string;
 
   @Prop({ trim: true, default: '' })
+  municipality?: string;
+
+  @Prop({ trim: true, default: '' })
   source?: string;
+
+  @Prop({ type: {}, default: null })
+  lastStatus?: LeadStatus;
 
   @Prop({ type: {}, default: LeadStatusEnum.TO_CALL })
   status?: LeadStatus = LeadStatustype.TO_CALL;
+
 
   @Prop({ required: true, default: [] })
   timeline?: LeadTimeline[];
@@ -72,6 +105,12 @@ export class Lead {
   })
   assignedBy?: string;
 
+  @Prop(
+
+    { trim: true, default: '' }
+  )
+  genre?: string;
+  
   @Prop({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Bank',
@@ -123,6 +162,10 @@ export class Lead {
   @Prop({ default: '' })
   salary?: string;
 
+  @Prop({ default: [], type: [UserComment] })
+  comments?: UserComment[];
+
+
   @Prop({
     type: {
       projectID: {
@@ -133,9 +176,9 @@ export class Lead {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Lot',
       },
-      houseModel:{
-        type: Object
-      }
+      houseModel: {
+        type: Object,
+      },
     },
     default: null,
   })
@@ -149,5 +192,18 @@ export class Lead {
       priceWithDiscount: number;
     };
   };
+
+  @Prop({ type: Object, default: [] })
+  documents?: string[];
+
+  @Prop({ type: Date, default: null })
+  lastStatusUpdate?: Date;
+
+
+
+  createdAt: Date;
+
+  updatedAt: Date;
 }
+
 export const LeadSchema = SchemaFactory.createForClass(Lead);

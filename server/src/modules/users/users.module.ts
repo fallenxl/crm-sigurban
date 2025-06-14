@@ -5,6 +5,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { User, UserSchema } from './schemas';
 import { Lead, LeadSchema } from '../lead/schemas/lead.schemas';
 import { NotificationModule } from '../notification/notification.module';
+import { SettingsModule } from '../settings/settings.module';
 
 @Module({
   imports: [

@@ -3,7 +3,7 @@ import { SocketGateway } from './gateways/socket.gateway';
 
 @Module({
   imports: [],
-  providers: [ SocketGateway],
-  exports: [ SocketGateway],
+  providers: [SocketGateway],
+  exports: [SocketGateway],
 })
 export class SocketModule {}

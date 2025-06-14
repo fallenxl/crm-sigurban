@@ -7,6 +7,7 @@ import { ErrorManager } from "src/utils/error.manager";
 import { UsersService } from "src/modules/users/services/users.service";
 import { Request } from "express";
 import { Lead } from "src/modules/lead/schemas/lead.schemas";
+import { Roles } from '../../../constants';
 @Injectable({ scope: Scope.REQUEST })
 export class NotificationService {
     constructor(@InjectModel(Notification.name) private readonly notificationModel: Model<Notification>,
@@ -47,6 +48,20 @@ export class NotificationService {
         }
     }
 
+    async sendNotificationToRole(notification: INotification, role: Roles[]): Promise<Notification[]> {
+        try {
+            const users = await this.usersService.getAllUser()
+            const notifications = []
+            for (const user of users) {
+                if (role.includes(user.role)) {
+                    notifications.push(await this.notificationModel.create({ ...notification, userID: user._id }))
+                }
+            }
+            return Promise.all(notifications)
+        } catch (error) {
+            throw ErrorManager.createSignatureError(error.message)
+        }
+    }
     async sendNotificationToInvolved(notification: INotification, leadFound: Lead): Promise<void> {
         try {
             if(leadFound.advisorID){
@@ -58,7 +73,8 @@ export class NotificationService {
             if(leadFound.bankManagerID){
                 await this.sendNotification({ ...notification, userID: leadFound.bankManagerID })
             }
-            await this.sendNotificationToAdmin(notification)
+            await this.sendNotificationToRole(notification, ['ADMIN', 'SUPERVISOR'] as Roles[])
+
 
             
         } catch (error) {

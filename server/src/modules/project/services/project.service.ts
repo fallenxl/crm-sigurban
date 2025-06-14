@@ -6,11 +6,13 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { ErrorManager } from 'src/utils/error.manager';
 import { CreateLotDto } from '../dto/create-lot.dto';
+import { LotsService } from 'src/modules/lots/services/lots.service';
 
 @Injectable()
 export class ProjectService {
   constructor(
     @InjectModel(Project.name) private projectModel: Model<Project>,
+    private readonly lotService: LotsService,
   ) {}
 
   async createProject(createProjectDto: CreateProjectDto): Promise<Project> {
@@ -28,18 +30,6 @@ export class ProjectService {
     }
   }
 
-  async createLot(
-    projectId: string,
-    createLotDto: CreateLotDto,
-  ): Promise<Project> {
-    try {
-      const project = await this.projectModel.findById(projectId);
-      return await project.save();
-    } catch (error) {
-      throw ErrorManager.createSignatureError(error.message);
-    }
-  }
-
   async findAll(): Promise<Project[]> {
     try {
       return await this.projectModel.find();
@@ -48,13 +38,14 @@ export class ProjectService {
     }
   }
 
-  async findOne(id: string): Promise<Project> {
+  async findOne(id: string) {
     try {
       return await this.projectModel.findById(id);
     } catch (error) {
       throw ErrorManager.createSignatureError(error.message);
     }
   }
+                        
 
   async findModelsByProjectId(id: string) {
     try {
@@ -67,6 +58,32 @@ export class ProjectService {
   async findProjectByName(name: string): Promise<Project> {
     try {
       return await this.projectModel.findOne({ name });
+    } catch (error) {
+      throw ErrorManager.createSignatureError(error.message);
+    }
+  }
+
+  async updateProject(id: string, updateProjectDto: UpdateProjectDto) {
+    try {
+      return await this.projectModel.findByIdAndUpdate(id, updateProjectDto, {
+        new: true,
+      });
+    } catch (error) {
+      throw ErrorManager.createSignatureError(error.message);
+    }
+  }
+
+  async deleteProject(id: string) {
+    try {
+      const lotsFound = await this.lotService.findAllByProject(id);
+      if (lotsFound.length > 0) {
+        throw new ErrorManager({
+          message: 'El proyecto tiene lotes asociados, no se puede eliminar',
+          type: 'BAD_REQUEST',
+        });
+      }
+
+      return await this.projectModel.findByIdAndDelete(id);
     } catch (error) {
       throw ErrorManager.createSignatureError(error.message);
     }

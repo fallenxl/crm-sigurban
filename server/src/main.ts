@@ -4,15 +4,18 @@ import { SwaggerModule } from '@nestjs/swagger';
 import { ValidationPipe } from '@nestjs/common';
 import * as morgan from 'morgan';
 import { CORS, SWAGGER_CONFIG } from './constants';
-import * as express from 'express';
-import { User, UserSchema } from './modules/users/schemas';
+import { User} from './modules/users/schemas';
 import { Model } from 'mongoose';
+import bodyParser, { json } from 'body-parser';
 
 const createNestServer = async () => {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, {
+    rawBody: true,
+
+  });
 
 
-  app.setGlobalPrefix('api');
+  app.setGlobalPrefix('api/');
 
   const document = SwaggerModule.createDocument(app, SWAGGER_CONFIG);
 
@@ -29,7 +32,8 @@ const createNestServer = async () => {
   app.enableCors(CORS);
 
   app.use(morgan('dev'));
-
+  //json limit 10 mb
+  app.use(json({limit: '50mb'}));
   await app.listen(process.env.PORT || 3001);
   //  crear un usuario admin
   const userModel = app.get('UserModel') as Model<User>;
@@ -47,7 +51,6 @@ const createNestServer = async () => {
   }
 
   console.log(`Application is running on: ${await app.getUrl()}`);
-
 };
 
 createNestServer();

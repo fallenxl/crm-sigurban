@@ -30,6 +30,10 @@ export class BankDTO {
   @IsOptional()
   @IsArray()
   financialPlans?: FinancialPlans[];
+
+  @IsOptional()
+  @IsArray()
+  requirements?: string[];
 }
 
 export class UpdateBankDTO {
@@ -57,4 +61,8 @@ export class UpdateBankDTO {
   @IsArray()
   @Type(() => FinancialPlans)
   financialPlans?: FinancialPlans[];
+
+  @IsOptional()
+  @IsArray()
+  requirements?: string[];
 }

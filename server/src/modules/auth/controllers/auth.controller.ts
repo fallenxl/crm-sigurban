@@ -31,4 +31,11 @@ export class AuthController {
   public async refreshToken() {
     return await this.authService.refreshToken();
   }
+
+  @Get('generate-token')
+  @ApiHeader({ name: 'authorization', description: 'Bearer token' })
+  @UseGuards(AuthGuard)
+  public async generateToken() {
+    return await this.authService.generateTokenByUser();
+  }
 }

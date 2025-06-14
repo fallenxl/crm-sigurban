@@ -1,1 +1,61 @@
-
+{
+  "company": {
+    "companyInfo": {
+      "name": "company name",
+      "description": "company description",
+      "logo": "company logo",
+      "address": "company address",
+      "phone": "company phone",
+      "email": "company email",
+      "website": "company website",
+      "createdAt": "created at"
+    },
+    "users": {
+      "id": "user id",
+      "fullname": "user full name",
+      "email": "user email",
+      "phone": "user phone",
+      "genre": "user genre",
+      "position": "user position",
+      "role": "ADMIN || SUPERADMIN || MANAGER || AGENT",
+      "notifications": "[{date: 'date', message: 'message', read: 'true || false'}]",
+      "createdAt": "created at"
+    },
+    "campaigns": {
+      "id": "campaign id",
+      "name": "campaign name",
+      "description": "campaign description",
+      "status": "ACTIVE || INACTIVE",
+      "createdAt": "created at"
+    },
+    "lead": {
+      "id": "lead id",
+      "name": "lead name",
+      "dni": "lead dni",
+      "comment": "lead comment",
+      "interestedIn": "lead interested in",
+      "source": "lead source",
+      "address": "lead address",
+      "email": "lead email",
+      "phone": "lead phone",
+      "status": "CONTACTED || PENDING || PREQUALIFIED || QUALIFIED || APPROVED || REJECTED",
+      "assignedTo": "user id || null",
+      "campaignId": "campaign id || null",
+      "timeLine": "[{date: 'date', status: 'status'}]",
+      "updatedAt": "updated at",
+      "createdAt": "created at"
+    },
+    "bank": {
+      "id": "bank id",
+      "name": "bank name",
+      "description": "bank description",
+      "financePlan": "[{name: 'name', description: 'description', interestRate: 'interest rate', ...}]",
+      "createdAt": "created at"
+    },
+    "leadStatus":{
+      "a_contactar":["Contactado", "No contesto", "No brindo informacion"],
+      "precalificacion_buro":["Aprobado", "Rechazado"],
+      "precalificacion_banco":["Aprobado", "Rechazado", "Se envio a calificar"]
+    }
+  }
+}

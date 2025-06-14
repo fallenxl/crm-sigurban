@@ -23,5 +23,10 @@ export const POPULATES_LEAD = [
   {
     path: "projectDetails.lotID",
     model: "Lots",
-  } 
+  } ,
+  {
+    path: "comments.userID",
+    model: "User",
+    select: ["name", "avatar"],
+  }
 ]

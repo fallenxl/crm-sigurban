@@ -5,8 +5,7 @@ import { IsNotEmpty, IsString, IsNumber, IsDate, IsOptional } from 'class-valida
 export class CreateLotDto {
     @ApiProperty()
     @IsNotEmpty()
-    @IsString()
-    lot: string;
+    lot: number;
 
     @ApiProperty()
     @IsOptional()
@@ -14,23 +13,20 @@ export class CreateLotDto {
     block?: string;
 
     @ApiProperty()
-    @IsNotEmpty()
     @IsNumber()
     area: number;
 
     @ApiProperty()
-    @IsNotEmpty()
     @IsNumber()
     price: number;
 
     @ApiProperty()
-    @IsNotEmpty()
+    @IsOptional()
     @IsString()
     status: string;
 
     @ApiProperty()
     @IsOptional()
-    @IsString()
     reservedBy: string;
 
     @ApiProperty()

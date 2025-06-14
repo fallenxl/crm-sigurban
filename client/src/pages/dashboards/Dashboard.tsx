@@ -279,7 +279,7 @@ function Dashboard() {
             </p>
             <small className="text-gray-500">Desde el inicio</small>
           </div>
-          {dashboardData?.currentGoals.generalGoals &&
+          {dashboardData?.currentGoals?.generalGoals &&
             <div className="bg-white p-4 rounded-lg shadow-md   flex-grow col-span-1 w-full h-full">
             <h2 className="text-xl font-semibold pb-5 flex justify-between">
               Objetivos generales
@@ -293,7 +293,7 @@ function Dashboard() {
                 Completado</span >}
             </p>
 
-            {dashboardData?.currentGoals.generalGoals && (
+            {dashboardData?.currentGoals?.generalGoals && (
               <>
                 <p className="text-sm font-semibold text-gray-500">Progreso:
                   
@@ -307,7 +307,7 @@ function Dashboard() {
               </>
             )}
           </div>}
-        {dashboardData?.currentGoals.individualGoals && 
+        {dashboardData?.currentGoals?.individualGoals && 
          <div className="bg-white p-4 rounded-lg shadow-md   flex-grow col-span-1 w-full h-full">
             <h2 className="text-xl font-semibold pb-5 flex justify-between">
               Objetivos Individuales
@@ -321,7 +321,7 @@ function Dashboard() {
 
             </p>
 
-            {dashboardData?.currentGoals.individualGoals && (
+            {dashboardData?.currentGoals?.individualGoals && (
               <>
                 <p className="text-sm font-semibold text-gray-500">Progreso:
                   

@@ -14,7 +14,6 @@ export class BankService {
   async createBank(bank: BankDTO): Promise<Bank> {
     try {
       const bankFound = await this.getBankByName(bank.name);
-    console.log(bankFound);
       if (bankFound) {
         throw new ErrorManager({
           type: 'CONFLICT',
@@ -28,6 +27,7 @@ export class BankService {
       throw ErrorManager.createSignatureError(error.message);
     }
   }
+
 
   async getAllBanks(): Promise<Bank[]> {
     try {
